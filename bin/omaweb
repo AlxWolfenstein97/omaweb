@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+"""OmaWeb CLI entry point.
+
+Works both from a git checkout and from the installed plugin directory.  The
+``lib`` directory is added to ``sys.path`` so the service, hook and CLI can
+share one implementation.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+
+def main() -> int:
+    here = Path(__file__).resolve().parent
+    plugin = here.parent
+    lib = plugin / "lib"
+    if str(lib) not in sys.path:
+        sys.path.insert(0, str(lib))
+    os.environ.setdefault("OMAWEB_PLUGIN_DIR", str(plugin))
+    from omaweb.cli import main as cli_main
+
+    return cli_main()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

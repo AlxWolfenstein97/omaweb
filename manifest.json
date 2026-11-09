@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.alxwolfenstein97.omaweb",
+  "name": "OmaWeb",
+  "version": "1.0.0",
+  "author": "AlxWolfenstein97",
+  "license": "MIT",
+  "description": "Catppuccin userstyles reshaped to the active Omarchy theme through Stylus, with an optional Dark Reader settings export for sites no style covers.",
+  "homepage": "https://github.com/AlxWolfenstein97/omaweb",
+  "repository": "https://github.com/AlxWolfenstein97/omaweb",
+  "kinds": [
+    "service"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml"
+  }
+}

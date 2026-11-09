@@ -1,0 +1,39 @@
+#!/bin/bash
+# OmaWeb theme-set hook — run by Omarchy at the end of every theme switch.
+# Quiet and non-fatal: never abort the theme switch.
+#
+# Recompiles the Catppuccin bundle for the new palette and rewrites the CSS
+# inside the OmaWeb asset extension.  The shim URL is stable
+# (chrome-extension://…/s/…), so this is the *only* thing a theme switch
+# needs; no browser re-import, no restart.
+
+set -uo pipefail
+
+PLUGIN="${OMAWEB_PLUGIN_DIR:-$HOME/.config/omarchy/plugins/io.github.alxwolfenstein97.omaweb}"
+APPLY="$PLUGIN/bin/omaweb"
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/omaweb"
+ERR="$STATE/last-hook-error"
+RUN="$STATE/last-run"
+
+mkdir -p "$STATE" 2>/dev/null || true
+rm -f "$ERR" 2>/dev/null || true
+
+[[ -f $APPLY ]] || exit 0
+
+# --no-fetch keeps a theme switch off the network; run `omaweb fetch` (or the
+# installer) when you want a newer Catppuccin bundle.
+if command -v python3 >/dev/null 2>&1; then
+  out=$(python3 "$APPLY" apply --quiet --no-fetch 2>&1)
+else
+  [[ -x $APPLY ]] || exit 0
+  out=$("$APPLY" apply --quiet --no-fetch 2>&1)
+fi
+status=$?
+
+printf '%s\n' "$out" >"$RUN" 2>/dev/null || true
+
+if ((status != 0)); then
+  printf '%s\n' "$out" >"$ERR" 2>/dev/null || true
+  exit 0
+fi
+exit 0
