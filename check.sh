@@ -251,7 +251,32 @@ assert cfg["overrides"]["github"] is False, cfg
 assert take["unthemed"] == [], take
 assert not any("github.com" == p or "github.com" in p for p in dr["disabledFor"]), dr
 PY
-"$bin" enable github --quiet >/dev/null 2>&1 || true
+if "$bin" match --all https://github.com | grep -q 'github.*(disabled)'; then
+  ok "match --all finds the disabled style"
+else
+  bad "match --all missed the disabled style"
+fi
+if "$bin" darkreader restore github.com --json \
+    --path "$tmp/dr-restore-settings.json" >"$tmp/dr-restore.json"; then
+  ok "darkreader restore"
+else
+  bad "darkreader restore"
+fi
+python3 - "$tmp/dr-restore.json" "$XDG_CONFIG_HOME/omaweb/config.json" \
+  "$tmp/dr-restore-settings.json" <<'PY' || fail=1
+import json, sys
+restored = json.load(open(sys.argv[1]))
+cfg = json.load(open(sys.argv[2]))
+dr = json.load(open(sys.argv[3]))
+assert "github" in restored["restoredStyles"], restored
+assert cfg["overrides"]["github"] is True, cfg
+assert any("github.com" in p for p in dr["disabledFor"]), dr
+PY
+if "$bin" match https://github.com | grep -q '^github'; then
+  ok "restored style matches again"
+else
+  bad "restored style still missing"
+fi
 if "$bin" darkreader unthemed unthemed.test --json --path "$tmp/dr-unthemed-settings.json" \
     >"$tmp/dr-unthemed.json"; then
   ok "darkreader unthemed"

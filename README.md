@@ -268,11 +268,23 @@ omaweb darkreader take wiki.archlinux.org
 That disables the OmaWeb style(s) that paint the site, clears any `unthemed`
 opt-out for it, and regenerates the settings file. Import
 `~/Downloads/omaweb-darkreader.json` in Dark Reader. The command prints the
-style ids it disabled, so `omaweb enable arch-wiki` (or whichever id) hands the
-site back to Catppuccin.
+style ids it disabled.
 
-If a style paints several sites, the command prints a note, because handing one
-site to Dark Reader also disables that style everywhere else.
+To hand the site back to Catppuccin, use the inverse:
+
+```bash
+omaweb darkreader restore wiki.archlinux.org
+```
+
+That re-enables every OmaWeb style that covers the site, removes any `unthemed`
+opt-out, rebuilds, and regenerates the settings file, so import it once more.
+`omaweb enable arch-wiki` (or whichever id) works too, but `restore` takes the
+site rather than the id and keeps Dark Reader in sync.
+
+If a style paints several sites, `take` prints a note, because handing one site
+to Dark Reader also disables that style everywhere else. `omaweb match <url>
+--all` lists the styles that cover a page including disabled ones, marked
+`(disabled)`, which is the quickest way to find what `take` turned off.
 
 ### Leaving a site unthemed
 
@@ -288,8 +300,8 @@ lives in `~/.config/omaweb/config.json` under `darkreader.unthemed` and is
 merged into every export, so a Dark Reader settings import does not wipe it.
 
 `omaweb darkreader list` shows the opt-outs. `omaweb darkreader unthemed <site>
---remove` lets Dark Reader theme the site again, and `omaweb enable <id>` hands
-it back to Catppuccin. `omaweb status` also shows the opt-outs.
+--remove` lets Dark Reader theme the site again, and `omaweb darkreader restore
+<site>` hands it back to Catppuccin. `omaweb status` also shows the opt-outs.
 
 > `archlinux.org` has no OmaWeb style; `arch-wiki` covers only
 > `wiki.archlinux.org`. If the main Arch site looks themed, that is Dark
@@ -306,11 +318,12 @@ omaweb doctor [--json]
 omaweb list [--enabled|--disabled] [--json]
 omaweb enable  <style-id>... | --all
 omaweb disable <style-id>... | --all
-omaweb match   <url>
+omaweb match   <url> [--all]
 omaweb state   export [FILE] | import FILE [--replace]
 omaweb stylus  status|import [--open]|open|install
 omaweb darkreader export [--json] [--path FILE]
 omaweb darkreader take <site> [--json] [--path FILE]
+omaweb darkreader restore <site> [--json] [--path FILE]
 omaweb darkreader unthemed <site> [--remove] [--json] [--path FILE]
 omaweb darkreader list [--json]
 omaweb browser detect|status|wire|unwire
@@ -319,7 +332,8 @@ omaweb theme   show|list|use <name>|auto
 
 `omaweb` with no arguments prints the current state. `omaweb match <url>` shows
 which enabled styles match a page, which is the quickest way to find the id to
-disable or hand to Dark Reader.
+disable or hand to Dark Reader. Add `--all` to include disabled styles, marked
+`(disabled)`.
 
 ## Configuration
 
@@ -458,6 +472,7 @@ extension, Stylus, the import state, the browser wiring and the config.
 | Default browser is Firefox/Zen/LibreWolf | Not supported — OmaWeb needs a Chromium-family browser (see [Limits](#limits-honestly)) |
 | Dark Reader ignores the import | Re-run `omaweb darkreader export` and import the visible copy in `~/Downloads` |
 | A covered site looks broken | `omaweb darkreader take <site>` |
+| Catppuccin should come back on a site | `omaweb darkreader restore <site>` |
 | A raw page is better than either engine | `omaweb darkreader unthemed <site>` |
 | A style is broken upstream | `omaweb disable <id>` until the next `omaweb fetch` |
 

@@ -139,17 +139,18 @@ def cmd_disable(args: argparse.Namespace) -> int:
 
 def cmd_match(args: argparse.Namespace) -> int:
     index = _index_or_build()
-    ids = build.match_url(index, args.url)
+    ids = build.match_url(index, args.url, enabled_only=not args.all)
     if args.json:
         _print_json(ids)
         return 0
     if not ids:
-        print("omaweb: no enabled style matches")
+        print("omaweb: no style matches")
         return 0
     for style_id in ids:
         style = next((s for s in index.get("styles") or [] if s["id"] == style_id), None)
         name = (style or {}).get("name") or ""
-        print(f"{style_id}  {name}")
+        suffix = "" if (style or {}).get("enabled") else "  (disabled)"
+        print(f"{style_id}  {name}{suffix}")
     return 0
 
 
@@ -240,14 +241,14 @@ def _darkreader_write(index: dict, cfg: dict,
     return settings, out, extra
 
 
-def _darkreader_covered(index: dict, site: str) -> list[str]:
-    """Enabled OmaWeb styles that paint ``site``."""
+def _darkreader_covered(index: dict, site: str, *, enabled_only: bool = True) -> list[str]:
+    """OmaWeb styles that paint ``site`` (enabled ones by default)."""
     urls = [site] if "://" in site else [
         f"https://{site}", f"https://{site.rstrip('/')}/",
     ]
     found: list[str] = []
     for url in urls:
-        for style_id in build.match_url(index, url):
+        for style_id in build.match_url(index, url, enabled_only=enabled_only):
             if style_id not in found:
                 found.append(style_id)
     return found
@@ -317,6 +318,44 @@ def cmd_darkreader(args: argparse.Namespace) -> int:
             })
             return 0
         print(f"omaweb: removed {pattern} from the Dark Reader opt-outs")
+        print(f"omaweb: Dark Reader settings: {out}")
+        if extra and extra != out:
+            print(f"omaweb: copy: {extra}")
+        print("omaweb: import it in Dark Reader → Settings → Advanced → Import Settings")
+        return 0
+
+    if action == "restore":
+        covering = _darkreader_covered(index, site, enabled_only=False)
+        restored = [style_id for style_id in covering
+                    if not config.is_enabled(cfg, style_id)]
+        overrides = cfg.setdefault("overrides", {})
+        for style_id in covering:
+            overrides[style_id] = True
+        config.save(cfg)
+        config.set_unthemed(pattern, False)
+        if restored:
+            build.apply(quiet=True, no_fetch=True)
+            index = build.load_index()
+        cfg = config.load()
+        _, out, extra = _darkreader_write(index, cfg, args.path)
+        if args.json:
+            _print_json({
+                "site": pattern,
+                "action": "restore",
+                "restoredStyles": restored,
+                "coveredStyles": covering,
+                "unthemed": darkreader.user_patterns(cfg),
+                "settings": str(out),
+                "visible": str(extra) if extra else None,
+            })
+            return 0
+        if restored:
+            print(f"omaweb: restored {len(restored)} OmaWeb style(s): "
+                  f"{', '.join(restored)}")
+        elif covering:
+            print(f"omaweb: {len(covering)} OmaWeb style(s) already enabled for {pattern}")
+        else:
+            print(f"omaweb: no OmaWeb style covers {pattern}")
         print(f"omaweb: Dark Reader settings: {out}")
         if extra and extra != out:
             print(f"omaweb: copy: {extra}")
@@ -788,8 +827,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--quiet", action="store_true")
     p.set_defaults(func=cmd_disable)
 
-    p = sub.add_parser("match", help="which enabled styles match a URL")
+    p = sub.add_parser("match", help="which styles match a URL")
     p.add_argument("url")
+    p.add_argument("--all", action="store_true",
+                   help="include disabled styles")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_match)
 
@@ -831,6 +872,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="let Dark Reader theme the site again")
     u.add_argument("--json", action="store_true")
     u.add_argument("--path", default=None,
+                   help="also write to FILE (default ~/Downloads/omaweb-darkreader.json)")
+
+    r = dr.add_parser("restore",
+                      help="bring Catppuccin back on a site and re-export Dark Reader")
+    r.add_argument("site", help="host, host/path or URL")
+    r.add_argument("--json", action="store_true")
+    r.add_argument("--path", default=None,
                    help="also write to FILE (default ~/Downloads/omaweb-darkreader.json)")
 
     lst = dr.add_parser("list", help="list sites kept unthemed")

@@ -314,7 +314,7 @@ def load_index(*, build_if_missing: bool = True) -> dict[str, Any]:
 
 # --------------------------------------------------------------------------- matching
 
-def match_url(index: dict[str, Any], url: str) -> list[str]:
+def match_url(index: dict[str, Any], url: str, *, enabled_only: bool = True) -> list[str]:
     """Python mirror of Stylus' section matcher (used by ``omaweb match``)."""
     from urllib.parse import urlparse
 
@@ -322,7 +322,7 @@ def match_url(index: dict[str, Any], url: str) -> list[str]:
     host = (parsed.hostname or "").lower()
     out: list[str] = []
     for style in index.get("styles") or []:
-        if not style.get("enabled"):
+        if enabled_only and not style.get("enabled"):
             continue
         matched = False
         for block in style.get("blocks") or []:
