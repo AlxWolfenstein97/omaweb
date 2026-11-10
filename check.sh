@@ -356,7 +356,11 @@ cp "$tmp/config-before-all.json" "$XDG_CONFIG_HOME/omaweb/config.json"
 
 note "browser wiring"
 cat >"$XDG_CONFIG_HOME/chromium-flags.conf" <<EOF
+# Omarchy defaults
+--ozone-platform=wayland
+--password-store=gnome-libsecret
 --load-extension=/opt/other-extension
+--no-default-browser-check
 EOF
 if "$bin" browser wire >/dev/null; then ok "wire asset extension"; else bad "wire asset extension"; fi
 if grep -qF "$asset" "$XDG_CONFIG_HOME/chromium-flags.conf"; then
@@ -368,6 +372,17 @@ if grep -qF "/opt/other-extension" "$XDG_CONFIG_HOME/chromium-flags.conf"; then
   ok "unrelated extension preserved"
 else
   bad "unrelated extension lost"
+fi
+if grep -qx -- '--ozone-platform=wayland' "$XDG_CONFIG_HOME/chromium-flags.conf" \
+    && grep -qx -- '# Omarchy defaults' "$XDG_CONFIG_HOME/chromium-flags.conf"; then
+  ok "unrelated flags and comments preserved"
+else
+  bad "wire rewrote unrelated lines"
+fi
+if [[ $(grep -c '^--load-extension=' "$XDG_CONFIG_HOME/chromium-flags.conf") == 1 ]]; then
+  ok "extension list stays on one line"
+else
+  bad "wire duplicated the load-extension line"
 fi
 
 note "browser detection"
@@ -429,6 +444,12 @@ c = next(r for r in rows if r["browser"] == "chromium")
 sys.exit(0 if c["loaded"] and c["active"] and c["wired"] else 1)
 '; then ok "profile load detected"; else bad "profile load not detected"; fi
 "$bin" browser unwire >/dev/null || true
+if ! grep -qF "$asset" "$XDG_CONFIG_HOME/chromium-flags.conf" \
+    && grep -qx -- '--ozone-platform=wayland' "$XDG_CONFIG_HOME/chromium-flags.conf"; then
+  ok "unwire keeps the rest of the file"
+else
+  bad "unwire damaged the rest of the file"
+fi
 if [[ -f $XDG_STATE_HOME/omarchy/omaweb/no-wire ]]; then
   ok "unwire remembers manual mode"
 else

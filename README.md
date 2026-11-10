@@ -134,7 +134,12 @@ The installer:
 2. detects the Chromium-family browsers you run and adds the OmaWeb asset
    extension to the existing `--load-extension=` line in each browser's flags
    file (`chromium-flags.conf`, `brave-flags.conf`, `vivaldi-stable.conf`, …),
-   preserving every other entry,
+   preserving every other entry. This is line surgery, not a managed block:
+   OmaWeb keeps all other lines as they are and only adds or removes its own
+   path. A stock Omarchy flags file already lists `copy-url`, `yt-dlp` and
+   `whatsapp-slim`; those stay, and Omarchy's later migrations can still append
+   to the same line. `unwire` deletes a file only when our path was the only
+   meaningful content left.
 3. arms the `theme-set.d` hook so every `omarchy theme set` recompiles the CSS
    (or pass `--with-theme-hook` / `--yes`; `--no-theme-hook` removes it),
 4. compiles the bundle and writes the CSS into the asset extension,
@@ -153,8 +158,7 @@ omaweb stylus import --open
 
 Pick `~/Downloads/omaweb-stylus.json` in **Manage → Import** (the picker hides
 `~/.local`, so a visible copy is written there). You can also drag the file
-onto the Stylus manager. You should see styles named `OmaWeb · …`, one per
-enabled Catppuccin style.
+onto the Stylus manager. You should see styles named `OmaWeb · …`, one per Catppuccin style.
 
 `omaweb stylus status` prints `import: not yet` until the shims are in Stylus,
 and `import: done` afterwards, so you do not have to guess whether the import
@@ -191,6 +195,20 @@ omaweb fetch && omaweb apply # download the newer bundle and rebuild
 `If-Modified-Since`), so it is cheap when the bundle has not changed and it
 reports `unchanged` instead of downloading 2.7 MB again. Nothing generated ever
 enters the repository, so theme and bundle changes create no commits.
+
+An update does **not** normally need a Stylus re-import. The shim URLs are
+stable (`chrome-extension://…/s/<style>/<block>.css`) and `omaweb apply`
+rewrites the CSS behind them, so new colours, upstream fixes and your
+enable/disable choices land on the next page load. Re-import only when the
+*set* of styles changes — upstream adds a style, or a style gains or loses a
+block section. Run `omaweb stylus import` first (it refreshes the visible
+`~/Downloads/omaweb-stylus.json`) and import that copy, not an older one.
+
+Your `take`, `restore` and `unthemed` choices live in
+`~/.config/omaweb/config.json`, never in the Stylus export, so re-importing
+cannot undo them. Dark Reader is separate: when an update adds or removes
+styles, run `omaweb darkreader export` and import the new settings so its
+`disabledFor` list matches.
 
 ## Dark Reader (separate, optional)
 
