@@ -137,6 +137,80 @@ def cmd_disable(args: argparse.Namespace) -> int:
     return _set_enabled(ids, False, quiet=args.quiet)
 
 
+def cmd_reset(args: argparse.Namespace) -> int:
+    cfg = config.load(create=True)
+    overrides = dict(cfg.get("overrides") or {})
+    unthemed = list(darkreader.user_patterns(cfg))
+    if not overrides and not unthemed:
+        if args.json:
+            _print_json({"clearedOverrides": {}, "clearedUnthemed": [],
+                         "changed": False})
+        else:
+            print("omaweb: nothing to reset — every style is on and no sites are excluded")
+        return 0
+
+    if args.dry_run:
+        if args.json:
+            _print_json({"clearedOverrides": overrides,
+                         "clearedUnthemed": unthemed, "dryRun": True})
+            return 0
+        print(f"omaweb: would clear {len(overrides)} style override(s) and "
+              f"{len(unthemed)} Dark Reader opt-out(s)")
+        for style_id, enabled in sorted(overrides.items()):
+            print(f"  {style_id}: {'on' if enabled else 'off'}")
+        for site in unthemed:
+            print(f"  {site}: unthemed")
+        return 0
+
+    if not args.yes:
+        if not sys.stdin.isatty():
+            print("omaweb: refusing to reset in a non-interactive shell;"
+                  " pass --yes", file=sys.stderr)
+            return 2
+        try:
+            answer = input(
+                f"Clear {len(overrides)} style override(s) and "
+                f"{len(unthemed)} Dark Reader opt-out(s)? [y/N] ").strip().lower()
+        except EOFError:
+            answer = ""
+        if answer not in ("y", "yes"):
+            print("omaweb: cancelled")
+            return 1
+
+    cfg["overrides"] = {}
+    cfg.setdefault("darkreader", {})["unthemed"] = []
+    config.save(cfg)
+
+    try:
+        build.apply(quiet=True, no_fetch=True)
+        index = build.load_index()
+    except Exception as exc:  # noqa: BLE001
+        print(f"omaweb: cleared the config, but the rebuild failed: {exc}",
+              file=sys.stderr)
+        print("omaweb: run: omaweb apply", file=sys.stderr)
+        return 1
+
+    cfg = config.load()
+    _, out, extra = _darkreader_write(index, cfg, args.path)
+    if args.json:
+        _print_json({
+            "clearedOverrides": overrides,
+            "clearedUnthemed": unthemed,
+            "changed": True,
+            "settings": str(out),
+            "visible": str(extra) if extra else None,
+        })
+        return 0
+    print(f"omaweb: cleared {len(overrides)} style override(s) and "
+          f"{len(unthemed)} Dark Reader opt-out(s)")
+    print("omaweb: every style is enabled again; reload open pages")
+    print(f"omaweb: Dark Reader settings: {out}")
+    if extra and extra != out:
+        print(f"omaweb: copy: {extra}")
+    print("omaweb: import it in Dark Reader → Settings → Advanced → Import Settings")
+    return 0
+
+
 def cmd_match(args: argparse.Namespace) -> int:
     index = _index_or_build()
     ids = build.match_url(index, args.url, enabled_only=not args.all)
@@ -829,6 +903,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--all", action="store_true", help="every style in the current build")
     p.add_argument("--quiet", action="store_true")
     p.set_defaults(func=cmd_disable)
+
+    p = sub.add_parser("reset",
+                       help="clear per-style overrides and Dark Reader opt-outs")
+    p.add_argument("--dry-run", action="store_true",
+                   help="show what would be cleared")
+    p.add_argument("--yes", action="store_true", help="do not ask")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--path", default=None,
+                   help="also write to FILE (default ~/Downloads/omaweb-darkreader.json)")
+    p.set_defaults(func=cmd_reset)
 
     p = sub.add_parser("match", help="which styles match a URL")
     p.add_argument("url")

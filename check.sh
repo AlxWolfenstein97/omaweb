@@ -319,6 +319,43 @@ assert cfg["darkreader"]["unthemed"] == [], cfg
 assert "unthemed.test" not in dr["disabledFor"], dr
 PY
 
+note "reset exclusions"
+"$bin" darkreader take github.com --json --path "$tmp/reset-take.json" >/dev/null
+"$bin" darkreader unthemed unthemed.test --json \
+  --path "$tmp/reset-unthemed.json" >/dev/null
+if "$bin" reset --dry-run --json | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+sys.exit(0 if d.get("dryRun") and d["clearedOverrides"].get("github") is False
+         and d["clearedUnthemed"] == ["unthemed.test"] else 1)
+'; then
+  ok "reset --dry-run"
+else
+  bad "reset --dry-run"
+fi
+if "$bin" reset --yes --json --path "$tmp/reset-settings.json" >"$tmp/reset.json"; then
+  ok "reset"
+else
+  bad "reset"
+fi
+python3 - "$tmp/reset.json" "$XDG_CONFIG_HOME/omaweb/config.json" \
+  "$tmp/reset-settings.json" <<'PY' || fail=1
+import json, sys
+cleared = json.load(open(sys.argv[1]))
+cfg = json.load(open(sys.argv[2]))
+dr = json.load(open(sys.argv[3]))
+assert cleared["clearedOverrides"].get("github") is False, cleared
+assert cfg["overrides"] == {}, cfg
+assert cfg["darkreader"]["unthemed"] == [], cfg
+assert any("github.com" in p for p in dr["disabledFor"]), dr
+assert "unthemed.test" not in dr["disabledFor"], dr
+PY
+if "$bin" match https://github.com | grep -q '^github'; then
+  ok "reset re-enabled the style"
+else
+  bad "reset left the style disabled"
+fi
+
 if "$bin" status --json >"$tmp/status.json"; then
   if python3 - "$tmp/status.json" <<'PY'; then
 import json, sys

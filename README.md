@@ -334,6 +334,20 @@ merged into every export, so a Dark Reader settings import does not wipe it.
 > `wiki.archlinux.org`. If the main Arch site looks themed, that is Dark
 > Reader's dynamic theme, not Catppuccin.
 
+### Resetting exclusions
+
+If you lose track of what you turned off, clear every per-site choice at once:
+
+```bash
+omaweb reset --dry-run   # show what would be cleared
+omaweb reset             # ask first, then rebuild
+```
+
+That removes every style override and every `darkreader.unthemed` opt-out, so
+all styles are on again, and regenerates the Dark Reader settings. A pinned
+theme is kept. `--yes` skips the prompt, and `--path FILE` writes the settings
+somewhere other than `~/Downloads`.
+
 ## Commands
 
 ```
@@ -345,6 +359,7 @@ omaweb doctor [--json]
 omaweb list [--enabled|--disabled] [--json]
 omaweb enable  <style-id>... | --all
 omaweb disable <style-id>... | --all
+omaweb reset   [--dry-run] [--yes] [--json] [--path FILE]
 omaweb match   <url> [--all]
 omaweb state   export [FILE] | import FILE [--replace]
 omaweb stylus  status|import [--open]|open|install
@@ -500,6 +515,7 @@ extension, Stylus, the import state, the browser wiring and the config.
 | Dark Reader ignores the import | Re-run `omaweb darkreader export` and import the visible copy in `~/Downloads` |
 | A covered site looks broken | `omaweb darkreader take <site>` |
 | Catppuccin should come back on a site | `omaweb darkreader restore <site>` |
+| You lost track of takes and opt-outs | `omaweb reset --dry-run`, then `omaweb reset` |
 | A raw page is better than either engine | `omaweb darkreader unthemed <site>` |
 | A style is broken upstream | `omaweb disable <id>` until the next `omaweb fetch` |
 
