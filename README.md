@@ -6,10 +6,10 @@ extension — no forked styles, no custom engine, no local server.**
 
 ![OmaWeb on Hackerman — catppuccin/userstyles, crates.io, Hacker News and Wikipedia](preview.png)
 
-Stock Catppuccin userstyles are beautiful, but they are *Catppuccin*: mocha,
-macchiato, frappe or latte, chosen by hand and frozen there. Your desktop is
-Hackerman neon, Tokyo Night blue or Rose Pine rose; your browser is still
-pastel. OmaWeb closes that gap.
+Stock Catppuccin userstyles are beautiful, but they are *Catppuccin*: a fixed
+palette chosen by hand and frozen there. Your desktop is
+Hackerman neon, Tokyo Night blue or Catppuccin Latte cream; your browser is
+still pastel. OmaWeb closes that gap.
 
 It compiles the official [Catppuccin userstyles](https://github.com/catppuccin/userstyles)
 bundle against your active Omarchy `colors.toml` and writes the CSS into a tiny
@@ -36,7 +36,7 @@ manual step as importing the Stylus shims; both are documented below.
   change applies on the next page load. Every style is on by default,
   including the login-walled ones.
 - **Chroma-style theme mixing.** Pin the browser to any installed theme while
-  the desktop stays where it is: `omaweb theme use rose-pine`.
+  the desktop stays where it is: `omaweb theme use tokyo-night`.
 - **An optional Dark Reader bridge.** One JSON import colours every site
   Catppuccin does not cover, in the same palette — and OmaWeb knows which sites
   to leave to Stylus.
@@ -395,7 +395,7 @@ disable or hand to Dark Reader. Add `--all` to include disabled styles, marked
 ```
 
 - `theme` — `auto` follows the desktop theme. An installed Omarchy theme name
-  (for example `rose-pine`) paints the browser in that theme instead, while the
+  (for example `tokyo-night`) paints the browser in that theme instead, while the
   desktop stays where it is. See [Mixing themes](#mixing-themes).
 - `overrides` — explicit per-style on/off. Missing keys are on, including the
   login-walled styles. `omaweb disable <id>` opts one out; `omaweb disable
@@ -418,12 +418,12 @@ flipping the whole machine.
 
 ```bash
 omaweb theme list              # installed Omarchy themes
-omaweb theme use rose-pine     # pin OmaWeb to Rose Pine
+omaweb theme use tokyo-night    # pin OmaWeb to Tokyo Night
 omaweb theme show              # what OmaWeb is rendering, and why
 omaweb theme auto              # follow the desktop again
 ```
 
-The pin lives in `config.json` as `"theme": "rose-pine"`. A theme switch still
+The pin lives in `config.json` as `"theme": "tokyo-night"`. A theme switch still
 runs the hook, but `omaweb apply` keeps the pinned palette until you clear it.
 `omaweb theme show` names both the pinned theme and the desktop theme, so the
 state is never ambiguous.
@@ -575,8 +575,8 @@ up.
   [OmaTTY](https://github.com/AlxWolfenstein97/omatty),
   [OmaHud](https://github.com/AlxWolfenstein97/omahud),
   [OmaMenu](https://github.com/AlxWolfenstein97/omamenu).
-- Theme previews: Hackerman, Catppuccin, Catppuccin Latte, Tokyo Night and
-  Rose Pine, all from the Omarchy theme set.
+- Theme previews: Hackerman, Catppuccin Latte and Tokyo Night, all from the
+  Omarchy theme set.
 - [Omarchy](https://omarchy.org/) — the theme pipeline and `theme-set` hooks
   OmaWeb stays aligned with.
 
