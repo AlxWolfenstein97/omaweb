@@ -216,6 +216,9 @@ def cmd_stylus(args: argparse.Namespace) -> int:
     if state["known"] and state["imported"]:
         print("omaweb: OmaWeb shims are already in Stylus;"
               " re-import only after adding or removing styles")
+    print("omaweb: Stylus also lists your own styles under"
+          ' "installed styles not in the backup" — leave that orphan list alone,'
+          " its Delete button removes them too")
     target = friendly or path
     if args.open:
         stylus.open_export_folder(quiet=args.quiet,

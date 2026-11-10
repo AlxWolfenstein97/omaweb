@@ -210,6 +210,15 @@ cannot undo them. Dark Reader is separate: when an update adds or removes
 styles, run `omaweb darkreader export` and import the new settings so its
 `disabledFor` list matches.
 
+Re-importing is a reconcile, not a duplicate merge: Stylus matches styles by
+name and updates them in place, so running it twice is harmless. There is no
+safe automated way to wipe only the OmaWeb shims — Stylus has no external API,
+and OmaWeb will not write its IndexedDB behind its back — but you do not need
+one. Stale shims for a style removed upstream are inert because their CSS file
+is gone. Ignore the import report's orphan list ("installed styles not in the
+backup"): it contains your own Stylus styles, and its Delete button would
+remove them too.
+
 ## Dark Reader (separate, optional)
 
 OmaWeb styles the sites it knows. Dark Reader is the fallback for everything
