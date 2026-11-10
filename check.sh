@@ -345,6 +345,53 @@ else
   bad "unrelated extension lost"
 fi
 
+note "browser detection"
+fakebin="$tmp/fakebin"
+mkdir -p "$fakebin"
+for name in brave-origin vivaldi firefox; do
+  printf '#!/bin/sh\nexit 0\n' >"$fakebin/$name"
+  chmod +x "$fakebin/$name"
+done
+if PATH="$fakebin:$PATH" "$bin" browser detect --json >"$tmp/detect.json"; then
+  if python3 - "$tmp/detect.json" <<'PY'; then
+import json, sys
+d = json.load(open(sys.argv[1]))
+installed = set(d["installed"])
+sys.exit(0 if {"brave-origin", "vivaldi"} <= installed
+         and "firefox" in d["firefox"] else 1)
+PY
+    ok "detect finds brave origin, vivaldi and firefox"
+  else
+    bad "detect missed a browser"
+  fi
+else
+  bad "browser detect"
+fi
+
+note "whole chromium family"
+if "$bin" browser wire --browser brave-origin --browser vivaldi >/dev/null; then
+  ok "wire brave origin and vivaldi"
+else
+  bad "wire brave origin and vivaldi"
+fi
+for flag in brave-origin-flags.conf vivaldi-stable.conf; do
+  if grep -qF "$asset" "$XDG_CONFIG_HOME/$flag"; then
+    ok "$flag points at the asset extension"
+  else
+    bad "$flag missing the asset extension"
+  fi
+done
+if "$bin" browser unwire --browser brave-origin --browser vivaldi >/dev/null; then
+  ok "unwire brave origin and vivaldi"
+else
+  bad "unwire brave origin and vivaldi"
+fi
+if ! grep -qF "$asset" "$XDG_CONFIG_HOME/vivaldi-stable.conf" 2>/dev/null; then
+  ok "unwire removes only the OmaWeb path"
+else
+  bad "unwire left the OmaWeb path"
+fi
+
 note "manual load (chrome://extensions)"
 mkdir -p "$XDG_CONFIG_HOME/chromium/Default"
 cat >"$XDG_CONFIG_HOME/chromium/Default/Preferences" <<JSON
@@ -373,6 +420,44 @@ if [[ ! -f $XDG_STATE_HOME/omarchy/omaweb/no-wire ]]; then
   ok "wire clears manual mode"
 else
   bad "wire kept manual mode"
+fi
+
+note "bundle scan"
+mkdir -p "$XDG_CACHE_HOME/omarchy/omaweb/scan"
+python3 - "$XDG_CACHE_HOME/omarchy/omaweb/bundle/import.json" \
+  "$XDG_CACHE_HOME/omarchy/omaweb/scan/upstream.json" <<'PY'
+import json, sys
+raw = json.load(open(sys.argv[1]))
+for entry in raw:
+    data = entry.get("usercssData") or {}
+    ns = str(data.get("namespace") or "").rstrip("/")
+    if ns.rsplit("/", 1)[-1] == "github":
+        data["version"] = "999.0.0"
+        entry["sourceCode"] = str(entry.get("sourceCode") or "") + "\n/* scan check */\n"
+        break
+else:
+    raise SystemExit("github style not found")
+json.dump(raw, open(sys.argv[2], "w"))
+PY
+if "$bin" scan --offline --json >"$tmp/scan.json"; then
+  if python3 - "$tmp/scan.json" <<'PY'; then
+import json, sys
+d = json.load(open(sys.argv[1]))
+row = next((c for c in d["changes"] if c["id"] == "github"), None)
+sys.exit(0 if d["offline"] and row and row["kind"] == "updated"
+         and row["to"] == "999.0.0" else 1)
+PY
+    ok "scan reports an upstream change"
+  else
+    bad "scan missed the upstream change"
+  fi
+else
+  bad "scan --offline"
+fi
+if [[ -s $XDG_STATE_HOME/omarchy/omaweb/scan.md ]]; then
+  ok "scan writes a markdown report"
+else
+  bad "scan markdown report missing"
 fi
 
 note "theme switch"
@@ -475,7 +560,7 @@ note "portable state"
 python3 - "$here" "$tmp/state-bundle.json" <<'PY' || fail=1
 import json, pathlib, sys
 sys.path.insert(0, sys.argv[1] + "/lib")
-from omaweb import build, config, state, util
+from omaweb import build, config, state
 
 def check(cond, label):
     print(("  ok   " if cond else "  FAIL ") + label)
@@ -489,18 +574,15 @@ try:
     cfg.setdefault("overrides", {})["state-test"] = True
     cfg.setdefault("darkreader", {})["unthemed"] = ["state-unthemed.test"]
     config.save(cfg)
-    util.write_json(util.cache_dir() / "scan" / "release.json",
-                    {"tag": "test", "fetchedAt": "2030-01-01T00:00:00Z"})
 
     bundle = state.export_bundle()
     check(bundle["config"]["overrides"]["state-test"] is True,
           "state: export carries overrides")
-    check(bundle["scan"]["release"]["tag"] == "test",
-          "state: export carries the scan cache")
-    util.write_json(bundle_path, bundle)
+    check("scan" not in bundle,
+          "state: export is config only")
+    pathlib.Path(bundle_path).write_text(json.dumps(bundle))
 
     config.save(original_cfg)
-    (util.cache_dir() / "scan" / "release.json").unlink()
 
     state.import_bundle(bundle_path)
     merged = config.load(create=True)
@@ -508,14 +590,8 @@ try:
           "state: import merges config overrides")
     check("state-unthemed.test" in merged["darkreader"]["unthemed"],
           "state: import merges Dark Reader opt-outs")
-    check((util.cache_dir() / "scan" / "release.json").exists(),
-          "state: import restores the scan cache")
 finally:
     config.save(original_cfg)
-    try:
-        (util.cache_dir() / "scan" / "release.json").unlink()
-    except OSError:
-        pass
     build.apply(quiet=True, no_fetch=True)
 PY
 

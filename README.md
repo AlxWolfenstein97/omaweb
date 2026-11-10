@@ -40,7 +40,7 @@ manual step as importing the Stylus shims; both are documented below.
 - **An optional Dark Reader bridge.** One JSON import colours every site
   Catppuccin does not cover, in the same palette — and OmaWeb knows which sites
   to leave to Stylus.
-- **A portable state bundle.** Config plus the scan cache, no credentials.
+- **A portable state bundle.** Config only, no credentials.
 
 ![OmaWeb on Tokyo Night — docs.rs, go.dev, PyPI and MDN](preview-tokyo-night.png)
 
@@ -87,12 +87,17 @@ install for that.
 - Python 3.9+
 - `lessc` (`npm install --prefix ~/.local/share/omaweb/less less@4` — the
   installer does this)
-- Chromium, Chrome, Brave or Edge
+- Chromium, Chrome, Brave, Brave Origin, Edge or Vivaldi
 - [Stylus](https://chromewebstore.google.com/detail/stylus/clngdbkpkpeebahjckkjfobafhncgmne)
   from the Chrome Web Store (the manager; OmaWeb never modifies it)
 - optionally, [Dark Reader](https://chromewebstore.google.com/detail/dark-reader/eimadpbcbfnmbkopoojfekhnkhdbieeh)
   for sites that no style covers — a separate store install, not part of
   `install.sh` (see below)
+
+OmaWeb supports the Chromium family only. Firefox, Zen and LibreWolf refuse
+unsigned extensions, so the automatic half of the design cannot exist there,
+and Omarchy does not theme their outer shell either. The installer detects them
+and explains that instead of pretending to support them.
 
 OmaWeb creates one small extension of its own at
 `~/.local/share/omaweb/extension`: a manifest plus generated CSS, with **no
@@ -126,13 +131,19 @@ consent — arm everything this plugin supports, skip Y/n":
 The installer:
 
 1. installs `lessc` under `~/.local/share/omaweb/less` if needed,
-2. creates the OmaWeb asset extension under `~/.local/share/omaweb/extension`
-   and adds it to the existing `--load-extension=` line in
-   `~/.config/chromium-flags.conf` (preserving every other entry),
+2. detects the Chromium-family browsers you run and adds the OmaWeb asset
+   extension to the existing `--load-extension=` line in each browser's flags
+   file (`chromium-flags.conf`, `brave-flags.conf`, `vivaldi-stable.conf`, …),
+   preserving every other entry,
 3. arms the `theme-set.d` hook so every `omarchy theme set` recompiles the CSS
    (or pass `--with-theme-hook` / `--yes`; `--no-theme-hook` removes it),
 4. compiles the bundle and writes the CSS into the asset extension,
 5. links `omaweb` into `~/.local/bin`.
+
+If the default browser is Firefox-family and no Chromium-family browser is
+installed, the installer prints the reason and stops. If both are present, it
+wires the Chromium-family one and says plainly that the default browser stays
+unthemed.
 
 Then install **Stylus** once from the Chrome Web Store and import the shims:
 
@@ -152,9 +163,9 @@ took.
 > **Do not** enable Stylus's "use adopted stylesheets" option. Adopted
 > stylesheets cannot contain `@import`.
 
-The flag step is optional. `./install.sh --no-wire` leaves the flags file
-alone; load `~/.local/share/omaweb/extension` once via `chrome://extensions` →
-**Developer mode** → **Load unpacked** instead. The choice is remembered
+The flag step is optional. `./install.sh --no-wire` leaves the browser flags
+files alone; load `~/.local/share/omaweb/extension` once via `chrome://extensions`
+→ **Developer mode** → **Load unpacked** instead. The choice is remembered
 (`~/.local/state/omarchy/omaweb/no-wire`), so the per-shell service does not
 quietly re-add the flag; `./install.sh --wire` or `omaweb browser wire`
 switches back. Because the manifest pins a `key`, the extension id is identical
@@ -167,14 +178,19 @@ it with `lessc` for the active theme, and writes the result to
 `~/.local/share/omaweb/`. The asset extension and the Stylus export are then
 generated from that build. A cached bundle is reused offline.
 
-Newer Catppuccin bundles are **not** fetched automatically. Run:
+Newer Catppuccin bundles are **not** fetched automatically. `omaweb apply`
+only downloads when the cache is missing, so theme switches stay offline. To
+check and refresh by hand:
 
 ```bash
-omaweb fetch && omaweb apply
+omaweb scan                  # what changed upstream since the cached bundle
+omaweb fetch && omaweb apply # download the newer bundle and rebuild
 ```
 
-Nothing generated ever enters the repository, so theme and bundle changes
-create no commits.
+`omaweb fetch` uses a conditional request (`If-None-Match` /
+`If-Modified-Since`), so it is cheap when the bundle has not changed and it
+reports `unchanged` instead of downloading 2.7 MB again. Nothing generated ever
+enters the repository, so theme and bundle changes create no commits.
 
 ## Dark Reader (separate, optional)
 
@@ -284,7 +300,7 @@ it back to Catppuccin. `omaweb status` also shows the opt-outs.
 ```
 omaweb apply [--force] [--no-fetch] [--quiet] [--jobs N] [--timeout S]
 omaweb fetch [--force] [--json] [--quiet]
-omaweb scan [--offline] [--since ISO] [--json] [--quiet]
+omaweb scan [--offline] [--json] [--quiet]
 omaweb status [--json]
 omaweb doctor [--json]
 omaweb list [--enabled|--disabled] [--json]
@@ -297,7 +313,7 @@ omaweb darkreader export [--json] [--path FILE]
 omaweb darkreader take <site> [--json] [--path FILE]
 omaweb darkreader unthemed <site> [--remove] [--json] [--path FILE]
 omaweb darkreader list [--json]
-omaweb browser status|wire|unwire
+omaweb browser detect|status|wire|unwire
 omaweb theme   show|list|use <name>|auto
 ```
 
@@ -356,29 +372,32 @@ runs the hook, but `omaweb apply` keeps the pinned palette until you clear it.
 `omaweb theme show` names both the pinned theme and the desktop theme, so the
 state is never ambiguous.
 
-## Finding broken styles
+## Bundle changes
 
-`omaweb scan` looks at the Catppuccin repository for issues opened after the
-current bundle release, maps them to style ids, and lists styles whose
-`current-maintainers` list is empty. It writes `scan.json` and `scan.md` to
-`~/.local/state/omarchy/omaweb/` and prints a summary. The raw release/issue
-cache lives in `~/.cache/omarchy/omaweb/scan/` and is included in the portable
-state bundle, so a new box can read the last scan offline.
+`omaweb scan` answers one question: has Catppuccin changed anything since the
+bundle OmaWeb compiled? It downloads the current `import.json` next to the
+cached copy, compares style versions and source digests, and lists what is
+updated, added, removed or changed in place. Styles enabled here are marked, so
+you can see whether a change affects your setup before refreshing.
 
 ```bash
 omaweb scan
-omaweb scan --since 2026-01-01
-omaweb scan --offline          # use the cached release/issues only
+omaweb scan --offline          # compare against the last downloaded copy
 ```
 
-The scan is advisory. OmaWeb never disables a style on its own; you decide what
-to turn off with `omaweb disable`.
+It writes `scan.json` and `scan.md` to `~/.local/state/omarchy/omaweb/`. The
+upstream copy and its ETag live in `~/.cache/omarchy/omaweb/scan/`, so the next
+scan is a conditional request rather than a full download.
+
+The scan is advisory. OmaWeb never disables or patches a style on its own; you
+decide what to turn off with `omaweb disable`, and `omaweb fetch && omaweb
+apply` picks up the newer bundle.
 
 ## Portable state
 
-`omaweb state export` writes one JSON bundle with the config (theme pin,
-overrides, Dark Reader opt-outs) and the scan cache. `omaweb state import`
-merges it into another box:
+`omaweb state export` writes one JSON bundle with the config: theme pin,
+per-style overrides and Dark Reader opt-outs. `omaweb state import` merges it
+into another box:
 
 ```bash
 omaweb state export                  # ~/omaweb-state.json
@@ -386,16 +405,21 @@ omaweb state import ~/omaweb-state.json
 omaweb state import ~/omaweb-state.json --replace
 ```
 
-Merging keeps existing overrides, adds the incoming ones, unions the `unthemed`
-lists, and takes the newer scan cache. `--replace` replaces the config instead.
-The bundle contains no credentials, but it does name the sites you care about,
-so treat it like a dotfile.
+Merging keeps existing overrides, adds the incoming ones, and unions the
+`unthemed` lists. `--replace` replaces the config instead. The bundle contains
+no credentials, but it does name the sites you care about, so treat it like a
+dotfile.
 
 The bundle itself is still downloaded and compiled on each box; the state file
-only carries the choices.
+only carries the choices. Scan data is not portable: it is a cache of what
+upstream looked like at one moment, so a fresh box runs `omaweb scan` instead.
 
 ## Limits, honestly
 
+- **Firefox, Zen and LibreWolf are out of scope.** They refuse unsigned
+  extensions, so OmaWeb cannot load its helper or its Stylus shims there, and
+  Omarchy does not theme their outer shell either. OmaWeb extends Omarchy's
+  theming; it does not reimplement it for a browser that blocks the mechanism.
 - **OmaWeb is CSS only.** A site that needs scripted theming, shadow DOM
   surgery or a background-image rewrite is not worth a fragile local style.
   Leave it to Dark Reader or the site's own dark mode.
@@ -431,6 +455,7 @@ extension, Stylus, the import state, the browser wiring and the config.
 | Chrome says the extension is unpacked | Expected; the asset extension is regenerated on every theme switch |
 | `omaweb` not found | Re-run `./install.sh`, or add `~/.local/bin` to `PATH` |
 | Extension not loaded | `omaweb browser wire` and restart the browser, or load `~/.local/share/omaweb/extension` by hand |
+| Default browser is Firefox/Zen/LibreWolf | Not supported — OmaWeb needs a Chromium-family browser (see [Limits](#limits-honestly)) |
 | Dark Reader ignores the import | Re-run `omaweb darkreader export` and import the visible copy in `~/Downloads` |
 | A covered site looks broken | `omaweb darkreader take <site>` |
 | A raw page is better than either engine | `omaweb darkreader unthemed <site>` |
@@ -450,7 +475,7 @@ extension id, Stylus import state and Dark Reader export.
 - **No browser-wide flags beyond `--load-extension`.** The installer edits only
   that one flag line and preserves every other entry. `--no-wire` skips it
   entirely.
-- **No credentials.** The portable state contains config and scan data only.
+- **No credentials.** The portable state contains config only.
 
 ## Disable vs remove
 
@@ -472,7 +497,9 @@ bash ~/.config/omarchy/plugins/io.github.alxwolfenstein97.omaweb/check.sh
 
 The check is hermetic: it builds into a temporary config, exercises the
 compile/publish path, the Stylus export, the Dark Reader export, enable/disable,
-browser wiring and the theme override, then cleans up.
+browser detection and flag wiring (including Brave Origin and Vivaldi), the
+bundle diff, the theme override, and the config-only state bundle, then cleans
+up.
 
 ## Credits
 

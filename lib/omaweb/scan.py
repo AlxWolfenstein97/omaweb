@@ -1,241 +1,171 @@
-"""Scan Catppuccin userstyles for post-bundle issues and maintainer gaps."""
+"""Compare the cached Catppuccin bundle with the current upstream download.
+
+``omaweb scan`` answers one question: has Catppuccin changed anything since the
+bundle OmaWeb compiled?  It downloads the current export next to the cache,
+diffs style versions, and flags the changes that affect styles enabled here.
+The scan is advisory; OmaWeb never disables a style on its own.
+"""
 
 from __future__ import annotations
 
-import datetime as _dt
-import json
-import os
-import re
-import urllib.error
-import urllib.parse
-import urllib.request
+from pathlib import Path
 from typing import Any
 
-from . import bundle, util
+from . import bundle, config, util
 
 
 REPO = "catppuccin/userstyles"
-RELEASE_TAG = "all-userstyles-export"
 
 
-def _now() -> str:
-    return _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def _gh_json(path: str, params: dict[str, Any] | None = None) -> Any:
-    """Prefer ``gh api`` (uses the user's auth); fall back to urllib.
-
-    ``gh`` may be installed but not logged in — in that case anonymous (or
-    ``GITHUB_TOKEN``) requests still work, so a broken ``gh`` must not turn a
-    scan into "zero issues".
-    """
-    query = ""
-    if params:
-        query = "?" + urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
-    gh = util.which("gh")
-    gh_error = None
-    if gh:
-        proc = util.run([gh, "api", "-H", "Accept: application/vnd.github+json", path + query], timeout=60)
-        if proc.returncode == 0:
-            return json.loads(proc.stdout)
-        gh_error = (proc.stderr or proc.stdout or "").strip()
-
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "OmaWeb/" + util.VERSION,
-    }
-    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-    if token:
-        headers["Authorization"] = "Bearer " + token
-    req = urllib.request.Request("https://api.github.com/" + path + query, headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=60) as response:
-            return json.load(response)
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", "replace")[:500]
-        message = f"GitHub HTTP {exc.code}: {body}"
-        if gh_error:
-            message += f" (gh: {gh_error[:200]})"
-        raise RuntimeError(message) from exc
-
-
-def release_info(*, offline: bool = False) -> dict[str, Any] | None:
-    cache = util.cache_dir() / "scan" / "release.json"
-    cached = util.read_json(cache)
-    if offline:
-        return cached
-    try:
-        data = _gh_json(f"repos/{REPO}/releases/tags/{RELEASE_TAG}")
-        assets = data.get("assets") or []
-        asset = assets[0] if assets else {}
-        info = {
-            "tag": data.get("tag_name") or RELEASE_TAG,
-            "published_at": data.get("published_at"),
-            "asset": {
-                "name": asset.get("name"),
-                "size": asset.get("size"),
-                "updated_at": asset.get("updated_at"),
-                "url": asset.get("browser_download_url"),
-            },
-            "fetchedAt": _now(),
-        }
-        util.write_json(cache, info)
-        return info
-    except Exception as exc:  # noqa: BLE001
-        if cached:
-            cached = dict(cached)
-            cached["warning"] = f"using cached release info ({exc})"
-            return cached
-        return {"error": str(exc), "tag": RELEASE_TAG, "asset": {}}
-
-
-def issues_since(since: str, *, offline: bool = False, max_pages: int = 20) -> tuple[list[dict[str, Any]], str | None]:
-    cache = util.cache_dir() / "scan" / "issues.json"
-    cached = util.read_json(cache)
-    if offline:
-        return (cached.get("issues") if isinstance(cached, dict) else []) or [], "offline"
-
-    issues: list[dict[str, Any]] = []
-    warning = None
-    try:
-        for page in range(1, max_pages + 1):
-            page_items = _gh_json(f"repos/{REPO}/issues", {
-                "state": "open",
-                "since": since,
-                "per_page": 100,
-                "page": page,
-                "sort": "updated",
-                "direction": "desc",
-            })
-            if not isinstance(page_items, list):
-                break
-            for item in page_items:
-                if item.get("pull_request"):
-                    continue
-                issues.append(item)
-            if len(page_items) < 100:
-                break
-        util.write_json(cache, {"fetchedAt": _now(), "since": since, "issues": issues})
-    except Exception as exc:  # noqa: BLE001
-        warning = str(exc)
-        if isinstance(cached, dict) and cached.get("issues"):
-            issues = cached["issues"]
-            warning = f"using cached issues ({exc})"
-        else:
-            issues = []
-    return issues, warning
-
-
-def _issue_style_ids(issue: dict[str, Any], known: set[str]) -> list[str]:
-    out: list[str] = []
-    for label in issue.get("labels") or []:
-        name = label.get("name") if isinstance(label, dict) else str(label)
-        if name in known:
-            out.append(name)
-    title = str(issue.get("title") or "")
-    m = re.match(r"^\s*(?:fix|feat|refactor|style|chore|docs|revert)\(([^)]+)\)", title, re.I)
-    if m:
-        sid = m.group(1).strip()
-        if sid in known:
-            out.append(sid)
-    return util.dedupe(out)
-
-
-def _issue_row(issue: dict[str, Any], style_ids: list[str]) -> dict[str, Any]:
-    return {
-        "number": issue.get("number"),
-        "title": issue.get("title"),
-        "url": issue.get("html_url"),
-        "state": issue.get("state"),
-        "created_at": issue.get("created_at"),
-        "updated_at": issue.get("updated_at"),
-        "labels": [l.get("name") if isinstance(l, dict) else str(l) for l in (issue.get("labels") or [])],
-        "styles": style_ids,
-    }
-
-
-def scan(*, offline: bool = False, since: str | None = None, as_json: bool = False,
-         quiet: bool = False) -> dict[str, Any]:
-    styles = []
-    try:
-        styles = bundle.load(required=False)
-    except Exception:
-        styles = []
-    bundle_ids = {s["id"] for s in styles}
-
-    if not offline and not util.userstyles_cache().exists():
-        try:
-            bundle.fetch(quiet=True)
-        except Exception:
-            pass
-    maintainers = bundle.parse_userstyles()
-    known = set(bundle_ids) | set(maintainers)
-
-    info = release_info(offline=offline)
-    asset = (info or {}).get("asset") or {}
-    since_value = since or asset.get("updated_at") or "1970-01-01T00:00:00Z"
-    issues, warning = issues_since(since_value, offline=offline)
-
-    by_style: dict[str, list[dict[str, Any]]] = {}
-    unmapped: list[dict[str, Any]] = []
-    for issue in issues:
-        ids = _issue_style_ids(issue, known)
-        row = _issue_row(issue, ids)
-        if not ids:
-            unmapped.append(row)
-        for sid in ids:
-            by_style.setdefault(sid, []).append(row)
-
-    unmaintained = []
-    for sid, meta in maintainers.items():
-        if meta.get("current-maintainers"):
+def _catalog(styles: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for style in styles:
+        sid = style.get("id")
+        if not sid:
             continue
-        unmaintained.append({
-            "id": sid,
-            "name": meta.get("name") or sid,
-            "link": meta.get("link"),
-            "inBundle": sid in bundle_ids,
-            "issues": len(by_style.get(sid) or []),
-        })
-    unmaintained.sort(key=lambda item: (not item["inBundle"], item["id"]))
+        out[sid] = {
+            "name": style.get("name") or sid,
+            "version": style.get("version") or "",
+            "digest": util.sha256_text(style.get("source") or ""),
+        }
+    return out
 
-    attention = []
-    for sid in sorted(set(by_style) | {x["id"] for x in unmaintained}):
-        in_bundle = sid in bundle_ids
-        attention.append({
+
+def compare(cached: list[dict[str, Any]], upstream: list[dict[str, Any]],
+            cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Return the upstream changes and a summary, marking enabled styles."""
+    before = _catalog(cached)
+    after = _catalog(upstream)
+    changes: list[dict[str, Any]] = []
+    for sid in sorted(set(before) | set(after)):
+        old = before.get(sid)
+        new = after.get(sid)
+        if old and not new:
+            kind = "removed"
+        elif new and not old:
+            kind = "added"
+        elif old["version"] != new["version"]:
+            kind = "updated"
+        elif old["digest"] != new["digest"]:
+            kind = "changed"
+        else:
+            continue
+        changes.append({
             "id": sid,
-            "inBundle": in_bundle,
-            "issues": len(by_style.get(sid) or []),
-            "unmaintained": not bool((maintainers.get(sid) or {}).get("current-maintainers")),
+            "name": (new or old)["name"],
+            "kind": kind,
+            "from": (old or {}).get("version") or None,
+            "to": (new or {}).get("version") or None,
+            "enabled": config.is_enabled(cfg, sid),
         })
 
-    report = {
-        "generatedAt": _now(),
-        "repository": REPO,
-        "release": info,
-        "since": since_value,
-        "bundle": {
-            "path": str(util.bundle_cache()),
-            "styles": len(styles),
-        },
-        "warning": warning,
-        "issues": {
-            "count": len(issues),
-            "mapped": sum(1 for issue in issues if _issue_style_ids(issue, known)),
-            "unmapped": unmapped,
-            "byStyle": {sid: rows for sid, rows in sorted(by_style.items())},
-        },
-        "maintainers": {
-            "known": len(maintainers),
-            "unmaintained": unmaintained,
-        },
-        "needsAttention": attention,
+    summary = {
+        "total": len(changes),
+        "added": sum(1 for item in changes if item["kind"] == "added"),
+        "removed": sum(1 for item in changes if item["kind"] == "removed"),
+        "updated": sum(1 for item in changes if item["kind"] == "updated"),
+        "changed": sum(1 for item in changes if item["kind"] == "changed"),
+        "enabled": sum(1 for item in changes if item["enabled"]),
     }
+    return changes, summary
 
-    util.write_json(util.state_dir() / "scan.json", report)
-    _write_markdown(report)
+
+def _upstream(*, offline: bool) -> tuple[Path | None, dict[str, Any]]:
+    """Return a path to the current upstream export and its metadata.
+
+    Online, this is a conditional download into ``cache/scan/``; offline, the
+    last copy is reused so a scan can still show what changed.
+    """
+    directory = util.cache_dir() / "scan"
+    dest = directory / "upstream.json"
+    meta_path = directory / "upstream-meta.json"
+    meta = util.read_json(meta_path, {}) or {}
+
+    if offline:
+        return (dest if dest.exists() else None), meta
+
+    try:
+        info = bundle.download(
+            bundle.BUNDLE_URL, dest,
+            etag=meta.get("etag"),
+            last_modified=meta.get("last_modified"),
+        )
+        meta["checkedAt"] = util.now()
+        if info.get("downloaded"):
+            meta["downloadedAt"] = util.now()
+            for key in ("etag", "last_modified", "size"):
+                if info.get(key) is not None:
+                    meta[key] = info[key]
+        meta.pop("error", None)
+    except Exception as exc:  # noqa: BLE001 - report, keep the last copy
+        meta["error"] = f"{type(exc).__name__}: {exc}"
+
+    try:
+        util.write_json(meta_path, meta)
+    except OSError:
+        pass
+    return (dest if dest.exists() else None), meta
+
+
+def scan(*, offline: bool = False, as_json: bool = False,
+         quiet: bool = False) -> dict[str, Any]:
+    cfg = config.load()
+    cached_path = util.bundle_cache()
+    cached: list[dict[str, Any]] = []
+    cached_error = None
+    if cached_path.exists():
+        try:
+            cached = bundle.parse(cached_path)
+        except Exception as exc:  # noqa: BLE001
+            cached_error = f"{type(exc).__name__}: {exc}"
+
+    upstream_path, meta = _upstream(offline=offline)
+    upstream_error = meta.get("error")
+    if upstream_path is None:
+        upstream_error = upstream_error or (
+            "no cached upstream copy — run: omaweb scan (without --offline)")
+
+    if upstream_path is None:
+        changes: list[dict[str, Any]] = []
+        summary = {"total": 0, "added": 0, "removed": 0, "updated": 0,
+                   "changed": 0, "enabled": 0}
+    else:
+        upstream = bundle.parse(upstream_path)
+        changes, summary = compare(cached, upstream, cfg)
+
+    report: dict[str, Any] = {
+        "generatedAt": util.now(),
+        "repository": REPO,
+        "offline": offline,
+        "cached": {
+            "path": str(cached_path),
+            "styles": len(cached),
+            "error": cached_error,
+        },
+        "upstream": {
+            "path": str(upstream_path) if upstream_path else None,
+            "checkedAt": meta.get("checkedAt"),
+            "downloadedAt": meta.get("downloadedAt"),
+            "size": meta.get("size"),
+            "error": upstream_error,
+        },
+        "summary": summary,
+        "changes": changes,
+    }
+    if cached_error:
+        report["error"] = f"cached bundle unreadable: {cached_error}"
+    elif upstream_error:
+        report["error"] = upstream_error
+
+    try:
+        util.write_json(util.state_dir() / "scan.json", report)
+        _write_markdown(report)
+    except OSError:
+        pass
 
     if as_json:
+        import json
+
         print(json.dumps(report, indent=2))
     elif not quiet:
         _print_report(report)
@@ -243,59 +173,59 @@ def scan(*, offline: bool = False, since: str | None = None, as_json: bool = Fal
 
 
 def _write_markdown(report: dict[str, Any]) -> None:
+    summary = report["summary"]
     lines = [
         "# OmaWeb scan",
         "",
         f"Generated: {report['generatedAt']}",
-        f"Bundle styles: {report['bundle']['styles']}",
-        f"Bundle asset updated: {(report.get('release') or {}).get('asset', {}).get('updated_at')}",
-        f"Issues updated since: {report['since']}",
-        "",
-        f"Open issues after the bundle: {report['issues']['count']} "
-        f"({report['issues']['mapped']} mapped to a style)",
+        f"Cached bundle: {report['cached']['path']} "
+        f"({report['cached']['styles']} styles)",
+        f"Upstream checked: {report['upstream'].get('checkedAt') or 'never'}"
+        + (" (offline)" if report["offline"] else ""),
         "",
     ]
-    for sid, rows in report["issues"]["byStyle"].items():
-        lines.append(f"## {sid}")
-        for row in rows:
-            lines.append(f"- #{row['number']} [{row['title']}]({row['url']}) — updated {row['updated_at']}")
-        lines.append("")
-    lines.append("## Maintainer gaps")
-    for item in report["maintainers"]["unmaintained"]:
-        flags = []
-        if not item["inBundle"]:
-            flags.append("not in bundle")
-        lines.append(f"- {item['id']} — {item['name']}"
-                     + (f" ({', '.join(flags)})" if flags else ""))
+    if report.get("error"):
+        lines += [f"**{report['error']}**", ""]
+    lines += [
+        f"{summary['total']} style(s) changed upstream "
+        f"({summary['enabled']} enabled here): "
+        f"{summary['updated']} updated, {summary['added']} added, "
+        f"{summary['removed']} removed, {summary['changed']} changed in place.",
+        "",
+    ]
+    for item in report["changes"]:
+        versions = ""
+        if item["from"] and item["to"] and item["from"] != item["to"]:
+            versions = f" {item['from']} → {item['to']}"
+        elif item["kind"] == "added":
+            versions = f" {item['to'] or ''}".rstrip()
+        lines.append(f"- **{item['id']}** ({item['name']}) — {item['kind']}"
+                     f"{versions}{' · enabled' if item['enabled'] else ' · disabled'}")
     lines.append("")
     util.atomic_write(util.state_dir() / "scan.md", "\n".join(lines))
 
 
 def _print_report(report: dict[str, Any]) -> None:
-    release = report.get("release") or {}
-    asset = release.get("asset") or {}
-    print(f"omaweb scan — bundle {asset.get('updated_at') or 'unknown'} "
-          f"({report['bundle']['styles']} styles)")
-    if report.get("warning"):
-        print(f"omaweb: {report['warning']}")
-    print(f"open issues updated since bundle: {report['issues']['count']} "
-          f"({report['issues']['mapped']} mapped to a style)")
-    for sid, rows in list(report["issues"]["byStyle"].items())[:20]:
-        for row in rows:
-            print(f"  {sid:28s} #{row['number']:<5} {row['title']}")
-    if len(report["issues"]["byStyle"]) > 20:
-        print(f"  … {len(report['issues']['byStyle']) - 20} more styles")
-
-    gaps = report["maintainers"]["unmaintained"]
-    print(f"maintainer gaps: {len(gaps)} styles with no current maintainer")
-    for item in gaps[:30]:
-        flags = []
-        if not item["inBundle"]:
-            flags.append("not in bundle")
-        suffix = f" ({', '.join(flags)})" if flags else ""
-        print(f"  {item['id']:28s} {item['name']}{suffix}")
-    if len(gaps) > 30:
-        print(f"  … {len(gaps) - 30} more")
-
-    print(f"needs attention: {len(report['needsAttention'])} styles")
+    summary = report["summary"]
+    cached = report["cached"]
+    print(f"omaweb scan — cached bundle {cached['styles']} styles"
+          + (" (offline)" if report["offline"] else ""))
+    if report.get("error"):
+        print(f"omaweb: {report['error']}")
+        if not report["upstream"].get("path"):
+            return
+    if not summary["total"]:
+        print("upstream: nothing changed — the cached bundle is current")
+        return
+    print(f"upstream: {summary['total']} style(s) changed "
+          f"({summary['enabled']} enabled here)")
+    for item in report["changes"][:40]:
+        if item["from"] and item["to"] and item["from"] != item["to"]:
+            versions = f"{item['from']} → {item['to']}"
+        else:
+            versions = item["kind"]
+        print(f"  {item['id']:28s} {versions:28s} "
+              f"{'enabled' if item['enabled'] else 'disabled'}")
+    if summary["total"] > 40:
+        print(f"  … {summary['total'] - 40} more")
     print(f"report: {util.state_dir() / 'scan.json'}")

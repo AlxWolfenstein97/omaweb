@@ -185,7 +185,7 @@ def apply(*, force: bool = False, no_fetch: bool = False, quiet: bool = False,
     if not theme["colors"] and not quiet:
         print(f"omaweb: no colors.toml at {util.theme_dir()} — using a neutral fallback palette")
 
-    if not no_fetch:
+    if not no_fetch and not util.bundle_cache().exists():
         try:
             bundle.fetch(quiet=True)
         except Exception as exc:  # noqa: BLE001

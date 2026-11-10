@@ -64,17 +64,13 @@ def cmd_fetch(args: argparse.Namespace) -> int:
 
 
 def cmd_scan(args: argparse.Namespace) -> int:
-    scan.scan(offline=args.offline, since=args.since, as_json=args.json,
-              quiet=args.quiet)
+    scan.scan(offline=args.offline, as_json=args.json, quiet=args.quiet)
     return 0
 
 
 def cmd_state(args: argparse.Namespace) -> int:
     if args.action == "export":
-        exported = state.export_bundle(
-            include_config=not args.no_config,
-            include_scan=not args.no_scan,
-        )
+        exported = state.export_bundle()
         if args.file == "-":
             _print_json(exported)
             return 0
@@ -83,11 +79,8 @@ def cmd_state(args: argparse.Namespace) -> int:
         print(f"omaweb: exported state to {path}")
         return 0
 
-    summary = state.import_bundle(
-        Path(args.file).expanduser(), replace=args.replace,
-        include_config=not args.no_config,
-        include_scan=not args.no_scan,
-    )
+    summary = state.import_bundle(Path(args.file).expanduser(),
+                                  replace=args.replace)
     if args.json:
         _print_json(summary)
         return 0
@@ -95,8 +88,6 @@ def cmd_state(args: argparse.Namespace) -> int:
     if cfg:
         print(f"omaweb: config imported ({cfg['overrides']} override(s), "
               f"{cfg['unthemed']} Dark Reader opt-out(s), theme {cfg['theme']})")
-    if summary.get("scan"):
-        print(f"omaweb: scan cache imported ({summary['scan']} file(s))")
     if summary.get("applyError"):
         print(f"omaweb: could not re-apply the build: {summary['applyError']}",
               file=sys.stderr)
@@ -377,7 +368,25 @@ def cmd_darkreader(args: argparse.Namespace) -> int:
 
 def cmd_browser(args: argparse.Namespace) -> int:
     asset = stylus.asset_dir()
-    browsers = getattr(args, "browser", None) or browser.detect()
+    if args.action == "unwire":
+        # Remove our path from every known flags file, even a browser that has
+        # since been uninstalled; the file itself may still be around.
+        browsers = getattr(args, "browser", None) or list(browser.FLAG_FILES)
+    else:
+        browsers = getattr(args, "browser", None) or browser.detect()
+
+    if args.action == "detect":
+        report = browser.detect_report()
+        if args.json:
+            _print_json(report)
+            return 0
+        print("chromium-family: " + (", ".join(report["installed"]) or "none"))
+        print("firefox-family:  " + (", ".join(report["firefox"]) or "none")
+              + ("  (not supported)" if report["firefox"] else ""))
+        print("default:         " + (report["defaultEntry"] or "unknown")
+              + (f" ({report['default']})" if report["default"] else ""))
+        print("wired:           " + (", ".join(report["wired"]) or "none"))
+        return 0
 
     if args.action == "status":
         rows = browser.status(asset)
@@ -655,6 +664,26 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     rows_status = browser.status(stylus.asset_dir())
     wired = [row["browser"] for row in rows_status if row.get("wired")]
     loaded = [row["browser"] for row in rows_status if row.get("loaded")]
+    installed = [row["browser"] for row in rows_status if row.get("installed")]
+    _check(rows, "PASS" if installed else "WARN", "browsers",
+           ", ".join(installed) if installed else "none detected — install a Chromium-family browser")
+    default_row = next((row for row in rows_status if row.get("default")), None)
+    if default_row:
+        _check(rows, "PASS", "default browser",
+               f"{default_row['browser']} ({default_row['path']})")
+    else:
+        report = browser.detect_report()
+        if report["firefox"]:
+            _check(rows, "WARN", "default browser",
+                   f"{report['defaultEntry'] or 'unknown'} — Firefox-family, not supported")
+        elif report["defaultEntry"]:
+            _check(rows, "WARN", "default browser",
+                   f"{report['defaultEntry']} — not a browser OmaWeb wires")
+        else:
+            _check(rows, "WARN", "default browser", "unknown")
+    if browser.detect_firefox():
+        _check(rows, "WARN", "firefox",
+               ", ".join(browser.detect_firefox()) + " — not supported (unsigned extensions)")
     if loaded:
         _check(rows, "PASS", "extension load",
                f"loaded in {loaded[0]}"
@@ -720,27 +749,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--quiet", action="store_true")
     p.set_defaults(func=cmd_fetch)
 
-    p = sub.add_parser("scan", help="scan issues and maintainer gaps")
+    p = sub.add_parser("scan", help="compare the cached bundle with upstream")
     p.add_argument("--offline", action="store_true")
-    p.add_argument("--since", default=None)
     p.add_argument("--json", action="store_true")
     p.add_argument("--quiet", action="store_true")
     p.set_defaults(func=cmd_scan)
 
-    p = sub.add_parser("state", help="export/import config and the scan cache")
+    p = sub.add_parser("state", help="export/import the portable config")
     st = p.add_subparsers(dest="action", required=True)
     e = st.add_parser("export", help="write a portable state bundle")
     e.add_argument("file", nargs="?", default=None,
                    help="destination (default ~/omaweb-state.json; - for stdout)")
-    e.add_argument("--no-config", action="store_true")
-    e.add_argument("--no-scan", action="store_true")
     e.set_defaults(func=cmd_state)
     i = st.add_parser("import", help="merge a portable state bundle into this box")
     i.add_argument("file")
     i.add_argument("--replace", action="store_true",
                    help="replace config instead of merging")
-    i.add_argument("--no-config", action="store_true")
-    i.add_argument("--no-scan", action="store_true")
     i.add_argument("--json", action="store_true")
     i.set_defaults(func=cmd_state)
 
@@ -816,6 +840,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("browser", help="wire the OmaWeb asset extension into browser flags")
     br = p.add_subparsers(dest="action", required=True)
+    b = br.add_parser("detect", help="what is installed, and what is the default")
+    b.add_argument("--json", action="store_true")
     b = br.add_parser("status")
     b.add_argument("--json", action="store_true")
     b = br.add_parser("wire")

@@ -6,6 +6,7 @@ service, the theme-set hook and the CLI all work from a plain checkout.
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import os
 import re
@@ -17,6 +18,11 @@ from typing import Any, Iterable
 
 
 VERSION = "1.0.0"
+
+
+def now() -> str:
+    return (_dt.datetime.now(_dt.timezone.utc).replace(microsecond=0)
+            .isoformat().replace("+00:00", "Z"))
 
 
 # --------------------------------------------------------------------------- paths
@@ -93,10 +99,6 @@ def theme_name() -> str:
 
 def bundle_cache() -> Path:
     return cache_dir() / "bundle" / "import.json"
-
-
-def userstyles_cache() -> Path:
-    return cache_dir() / "bundle" / "userstyles.yml"
 
 
 # --------------------------------------------------------------------------- io

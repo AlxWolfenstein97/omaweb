@@ -111,6 +111,57 @@ raise SystemExit(0 if stylus.store_stylus() else 1)
 PY
 }
 
+browser_field() {
+  python3 - "$here" "$1" <<'PY'
+import json, sys
+sys.path.insert(0, sys.argv[1] + "/lib")
+from omaweb import browser
+report = browser.detect_report()
+value = report.get(sys.argv[2])
+if isinstance(value, list):
+    print(" ".join(value))
+elif value is None:
+    print("")
+else:
+    print(value)
+PY
+}
+
+raw() { printf '%s\n' "$1" >&2; }
+
+firefox_nono() {
+  raw ""
+  raw "  +----------------------------------------------------------+"
+  raw "  |  Sorry - OmaWeb does not support Firefox, Zen or         |"
+  raw "  |  LibreWolf.                                              |"
+  raw "  +----------------------------------------------------------+"
+  raw ""
+  raw "  OmaWeb is an adapter for Stylus: a signed store extension plus"
+  raw "  a tiny unpacked helper that feeds it CSS. Firefox-family builds"
+  raw "  refuse unsigned extensions, and Omarchy does not theme their"
+  raw "  outer shell either, so there is no automatic half to build on."
+  raw "  OmaWeb extends Omarchy's theming; it does not reimplement it."
+  raw ""
+  raw "  Use Chromium, Chrome, Brave, Brave Origin, Edge or Vivaldi."
+  raw ""
+}
+
+chromium_browsers=()
+firefox_browsers=()
+wired_browsers=()
+loaded_browsers=()
+default_family=""
+default_entry=""
+
+detect_browsers() {
+  chromium_browsers=($(browser_field installed))
+  firefox_browsers=($(browser_field firefox))
+  wired_browsers=($(browser_field wired))
+  loaded_browsers=($(browser_field loaded))
+  default_family="$(browser_field defaultFamily)"
+  default_entry="$(browser_field defaultEntry)"
+}
+
 index_current() {
   [[ -f $index ]] || return 1
   python3 - "$index" "$here" <<'PY' >/dev/null 2>&1
@@ -125,6 +176,21 @@ raise SystemExit(0 if data.get("version") == 2
                  and (data.get("extension") or {}).get("id") == stylus.ASSET_ID else 1)
 PY
 }
+
+# --------------------------------------------------------------- browser detection
+if (( ! quiet )); then
+  detect_browsers
+  if [[ $default_family == firefox ]]; then
+    firefox_nono
+    if [[ ${#chromium_browsers[@]} -eq 0 ]]; then
+      raw "omaweb: refusing to continue - install a Chromium-family browser first."
+      exit 1
+    fi
+  fi
+  if [[ ${#chromium_browsers[@]} -eq 0 ]]; then
+    warn "no Chromium-family browser detected; OmaWeb will still build, but there is nothing to wire"
+  fi
+fi
 
 # --------------------------------------------------------------- LESS compiler
 install_lessc() {
@@ -266,17 +332,31 @@ if command -v omarchy >/dev/null 2>&1; then
 fi
 
 if (( ! quiet )); then
+  wired_browsers=($(browser_field wired))
+  loaded_browsers=($(browser_field loaded))
   note "done"
   printf '%s\n' ""
   printf '%s\n' "  extensions (both from the Chrome Web Store):"
   printf '%s\n' "    Stylus:      https://chromewebstore.google.com/detail/stylus/clngdbkpkpeebahjckkjfobafhncgmne"
   printf '%s\n' "    Dark Reader: https://chromewebstore.google.com/detail/dark-reader/eimadpbcbfnmbkopoojfekhnkhdbieeh"
   printf '%s\n' ""
+  if [[ ${#wired_browsers[@]} -gt 0 ]]; then
+    printf '%s\n' "  browser flags: ${wired_browsers[*]}"
+  elif [[ ${#loaded_browsers[@]} -gt 0 ]]; then
+    printf '%s\n' "  browser flags: none needed — loaded by hand in ${loaded_browsers[*]}"
+  elif [[ ${#chromium_browsers[@]} -gt 0 ]]; then
+    printf '%s\n' "  browser flags: none — run: omaweb browser wire"
+  fi
+  if [[ ${#firefox_browsers[@]} -gt 0 ]]; then
+    printf '%s\n' "  firefox-family: ${firefox_browsers[*]} (not supported)"
+  fi
+  printf '%s\n' ""
   printf '%s\n' "  next: import the Stylus shims once:"
   printf '%s\n' "        omaweb stylus import --open"
   printf '%s\n' "  optional: omaweb darkreader export   # import the JSON in Dark Reader"
   printf '%s\n' ""
-  printf '%s\n' "  newer Catppuccin bundle (not automatic): omaweb fetch && omaweb apply"
+  printf '%s\n' "  check for a newer Catppuccin bundle: omaweb scan"
+  printf '%s\n' "  then refresh it:                    omaweb fetch && omaweb apply"
   printf '%s\n' "  check: omaweb doctor"
   printf '%s\n' "  site:  omaweb status"
 fi

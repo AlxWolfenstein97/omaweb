@@ -60,7 +60,9 @@ PROFILE_DIRS = {
     "chromium": "chromium",
     "chrome": "google-chrome",
     "brave": "BraveSoftware/Brave-Browser",
+    "brave-origin": "BraveSoftware/Brave-Origin",
     "edge": "microsoft-edge",
+    "vivaldi": "vivaldi",
 }
 
 
