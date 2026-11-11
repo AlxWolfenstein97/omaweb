@@ -201,7 +201,9 @@ install_lessc() {
     return 1
   fi
   note "installing the LESS compiler (npm, user prefix)"
-  npm install --silent --no-audit --no-fund --prefix "$data_home/omaweb/less" less@4 >/dev/null 2>&1 \
+  npm install --silent --no-audit --no-fund \
+    --cache "$data_home/omaweb/.npm" \
+    --prefix "$data_home/omaweb/less" less@4 >/dev/null 2>&1 \
     || { warn "npm install of less failed"; return 1; }
   have_lessc
 }
