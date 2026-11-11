@@ -35,8 +35,9 @@ manual step as importing the Stylus shims; both are documented below.
 - **Live per-style toggles.** `omaweb disable <id>` writes an empty file; the
   change applies on the next page load. Every style is on by default,
   including the login-walled ones.
-- **Chroma-style theme mixing.** Pin the browser to any installed theme while
-  the desktop stays where it is: `omaweb theme use tokyo-night`.
+- **Theme mixing, like the other Oma plugins.** Pin the browser to any
+  installed theme while the desktop stays where it is: `omaweb theme use
+  tokyo-night` — the same move as `omahud set`, `omacursor set` or `omavt set`.
 - **An optional Dark Reader bridge.** One JSON import colours every site
   Catppuccin does not cover, in the same palette — and OmaWeb knows which sites
   to leave to Stylus.
@@ -413,8 +414,10 @@ enabled like everything else, so a fresh box exercises the whole set. Use
 ## Mixing themes
 
 OmaWeb can render in a different installed theme than the desktop. This is the
-same idea as Chroma's `--theme` mixing: pick a palette for one surface without
-flipping the whole machine.
+same idea as the other Oma appearance plugins: `omahud set tokyo-night` pins the
+HUD palette, `omacursor set tokyo-night` repaints the pointer, `omavt set
+tokyo-night` rewrites the TTY drop-in — each paints one surface from a chosen
+palette without flipping the whole machine.
 
 ```bash
 omaweb theme list              # installed Omarchy themes
