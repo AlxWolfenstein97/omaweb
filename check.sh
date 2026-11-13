@@ -122,24 +122,31 @@ def check(cond, label):
         raise SystemExit(1)
 
 def refused(source):
-    return bool(lessc.unsafe_reason(source, lib))
+    return bool(lessc.unsafe_reason(source))
 
 check(refused('@plugin "x.js";'), "@plugin refused")
 check(refused('.x{width:`1+1`}'), "inline JavaScript refused")
 check(refused('@import (inline) "/etc/passwd";'), "inline import refused")
 check(refused('@import (less) "x";'), "less import refused")
 check(refused('@import url("evil.less");'), "url(...less) import refused")
+check(refused('@import "evil.less" \\.css;'), "escaped-dot media suffix refused")
+check(refused('@import "evil.less"// .css\n;'), "line-comment media suffix refused")
+check(refused('@import "evil.less" screen;'), "media suffix import refused")
 check(refused('@import "x.CSS";'), "uppercase .CSS import refused")
+check(refused('@import (CSS) "evil.less";'), "uppercase import option refused")
+check(refused('@import (css, once) "evil.less";'), "combined import option refused")
+check(refused(f'@import "{lib}";'), "palette library import refused")
 check(refused('.x{background:data-uri("/etc/passwd")}'), "data-uri refused")
 check(refused('.x{width:image-size("/etc/passwd")}'), "image-size refused")
 check(not refused('@import (css) url("https://x/y.css");'), "css import allowed")
-check(not refused('@import "x.css";'), "lowercase .css import allowed")
+check(not refused('@import "x.css?v=1";'), "lowercase .css import allowed")
+check(not refused('.x{content:"@import \'evil.less\';"}'), "import inside a string ignored")
 raw = json.loads(bundle.read_text())
 bad = [
     entry.get("name")
     for entry in raw
     if lessc.unsafe_reason(
-        lessc.rewrite_imports(entry.get("sourceCode") or "", lib), lib)
+        lessc.rewrite_imports(entry.get("sourceCode") or "", lib))
 ]
 check(not bad, f"bundle passes guard ({len(raw)} entries)")
 PY

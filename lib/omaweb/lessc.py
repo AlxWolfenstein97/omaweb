@@ -8,10 +8,11 @@ resolved them.  We then split the compiled CSS into one file per
 selectors actually match the current URL.
 
 The bundle is remote, mutable data, so it is treated as data only: the compiler
-is asked to disable ``@plugin`` where the installed lessc supports it, and the
-source is refused if it still contains ``@plugin``, inline JavaScript, or an
-import that is not CSS or the vendored palette library.  A replaced bundle
-therefore cannot turn a theme switch into code execution.
+is asked to disable ``@plugin`` where the installed lessc supports it, the
+palette library is inlined instead of imported, and the source is refused if it
+still contains ``@plugin``, inline JavaScript, a file-reading function, or any
+import that is not plain CSS.  A replaced bundle therefore cannot turn a theme
+switch into code execution.
 """
 
 from __future__ import annotations
@@ -33,7 +34,9 @@ _IMPORT_RE = re.compile(
 )
 _CALL_RE = re.compile(r"\b(domain|url-prefix|url|regexp)\s*\(", re.I)
 _PLUGIN_RE = re.compile(r"@plugin\b", re.I)
-_IMPORT_STMT_RE = re.compile(r"@import\s*(?:\(([^)]*)\))?\s*([^;]+);", re.I)
+# lessc's own rule for "this import is plain CSS, just emit it" (tree/import.js).
+# Case-sensitive on purpose: `.CSS` is compiled as LESS by lessc.
+_CSS_PATH_RE = re.compile(r"[#.&?]css([?;].*)?$")
 _FILE_FN_RE = re.compile(r"\b(data-uri|image-size|image-width|image-height)\s*\(", re.I)
 
 # lessc flags we add when the installed compiler knows them.  Keyed by path;
@@ -97,7 +100,26 @@ def var_lines(entry: dict[str, Any]) -> str:
 
 
 def rewrite_imports(source: str, lib_path: Path) -> str:
-    return _IMPORT_RE.sub(f'@import "{lib_path}";', source)
+    """Replace the Catppuccin library import with the library's contents.
+
+    Inlining (rather than importing) means no LESS import survives into the
+    compile, so no recursive parser is ever created.  ``lib.less`` is only a
+    shim that re-exports ``std/v1.less``, so both URLs inline the same file.
+    """
+    try:
+        lib_text = lib_path.read_text(encoding="utf-8")
+    except OSError:
+        return source
+    used = False
+
+    def repl(_match: re.Match[str]) -> str:
+        nonlocal used
+        if used:
+            return ""
+        used = True
+        return lib_text
+
+    return _IMPORT_RE.sub(repl, source)
 
 
 def compile_less(source: str, lessc: str, workdir: Path, name: str,
@@ -261,14 +283,110 @@ def _find_js_backtick(text: str) -> int:
     return -1
 
 
-def unsafe_reason(source: str, lib_path: Path) -> str | None:
+def _skip_space(text: str, i: int) -> int:
+    n = len(text)
+    while i < n and text[i].isspace():
+        i += 1
+    return i
+
+
+def _read_quoted(text: str, i: int) -> tuple[str | None, int]:
+    """Read a quoted string starting at ``i``; returns ``(value, after)``."""
+    quote = text[i]
+    j = i + 1
+    n = len(text)
+    while j < n:
+        c = text[j]
+        if c == "\\":
+            j += 2
+            continue
+        if c == quote:
+            return text[i + 1:j], j + 1
+        j += 1
+    return None, i
+
+
+def _read_paren(text: str, i: int) -> tuple[str | None, int]:
+    """Read a balanced ``(...)`` starting at ``i``; returns ``(inner, after)``."""
+    depth = 0
+    j = i
+    n = len(text)
+    while j < n:
+        c = text[j]
+        if c in "\"'":
+            _, end = _read_quoted(text, j)
+            if end == j:
+                return None, i
+            j = end
+            continue
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return text[i + 1:j], j + 1
+        j += 1
+    return None, i
+
+
+def _imports_in(text: str) -> list[tuple[list[str], str | None]]:
+    """Collect ``(options, path)`` for every ``@import`` outside strings.
+
+    Only the import's own path token is read, never the media suffix that may
+    follow it: lessc resolves and compiles that path regardless of what media
+    text trails it.
+    """
+    found: list[tuple[list[str], str | None]] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c in "\"'":
+            end = _skip_string(text, i)
+            i = end if end > i else n
+            continue
+        if c == "/" and text.startswith("/*", i):
+            i = _skip_comment(text, i)
+            continue
+        boundary = i + 7 >= n or not (text[i + 7].isalnum() or text[i + 7] in "-_")
+        if c == "@" and text[i:i + 7].lower() == "@import" and boundary:
+            j = _skip_space(text, i + 7)
+            options: list[str] = []
+            if j < n and text[j] == "(":
+                raw, j = _read_paren(text, j)
+                if raw is None:
+                    found.append((options, None))
+                    i += 7
+                    continue
+                options = [part.strip() for part in raw.split(",") if part.strip()]
+                j = _skip_space(text, j)
+            path: str | None = None
+            if j < n and text[j] in "\"'":
+                path, j = _read_quoted(text, j)
+            elif text[j:j + 4].lower() == "url(":
+                raw, j = _read_paren(text, j + 3)
+                if raw is not None:
+                    value = raw.strip()
+                    if value[:1] in "\"'":
+                        path, _ = _read_quoted(value, 0)
+                    else:
+                        path = value or None
+            found.append((options, path))
+            i = j if j > i else i + 7
+            continue
+        i += 1
+    return found
+
+
+def unsafe_reason(source: str) -> str | None:
     """Refuse LESS that can execute code or read arbitrary files.
 
     The Catppuccin bundle is fetched from a mutable upstream release and may be
     replaced independently of the plugin.  It is only ever allowed to be a
-    stylesheet: no ``@plugin``, no inline JavaScript, and no LESS/inline import
-    other than the vendored palette library.  CSS imports are passthrough and
-    safe, so they stay.
+    stylesheet: no ``@plugin``, no inline JavaScript, no file-reading
+    functions, and no LESS import at all.  The palette library is inlined
+    before this check, so the compiled source is exactly what is scanned, and
+    CSS imports are passthrough and safe.
     """
     clean = _strip_comments(source)
     if _PLUGIN_RE.search(clean):
@@ -279,30 +397,18 @@ def unsafe_reason(source: str, lib_path: Path) -> str | None:
     if file_fn:
         return (f"refused unsafe LESS: {file_fn.group(1)}() reads local files "
                 "and is not allowed")
-    allowed = str(lib_path)
-    for match in _IMPORT_STMT_RE.finditer(clean):
-        options = {
-            item.strip().lower()
-            for item in (match.group(1) or "").split(",")
-            if item.strip()
-        }
-        target = match.group(2).strip()
-        if target.lower().startswith("url("):
-            target = target[4:].strip()
-            if target.endswith(")"):
-                target = target[:-1].strip()
-        bare = target.strip("\"'").strip()
-        # Only `(css)` is harmless; every other option forces LESS to read and
-        # process the target, including `url(...)` imports.  The extension
-        # check is deliberately case-sensitive: lessc only treats lowercase
-        # `.css` as a passthrough, while `.CSS` is compiled as LESS.
-        if options - {"css"}:
-            return f"refused unsafe LESS: import of {bare[:80]!r} is not allowed"
-        if "css" in options or bare == allowed:
+    for options, path in _imports_in(clean):
+        if path is None:
+            return "refused unsafe LESS: malformed @import"
+        if options:
+            # Only an exact `(css)` keeps lessc from reading the target.
+            if options != ["css"]:
+                joined = ",".join(options)[:40]
+                return f"refused unsafe LESS: import option {joined!r} is not allowed"
             continue
-        if bare.endswith(".css"):
+        if _CSS_PATH_RE.search(path):
             continue
-        return f"refused unsafe LESS: import of {bare[:80]!r} is not allowed"
+        return f"refused unsafe LESS: import of {path[:80]!r} is not allowed"
     return None
 
 
@@ -444,7 +550,7 @@ def build_style(entry: dict[str, Any], *, lessc: str, lib_path: Path, palette_le
     sid = entry["id"]
     source = rewrite_imports(entry["source"], lib_path)
     source = source + "\n\n" + var_lines(entry) + "\n" + palette_less
-    refused = unsafe_reason(source, lib_path)
+    refused = unsafe_reason(source)
     if refused:
         return None, refused
     css, error = compile_less(source, lessc, workdir, sid, timeout=timeout)
