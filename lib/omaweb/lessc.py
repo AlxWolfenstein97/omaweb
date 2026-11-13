@@ -34,6 +34,9 @@ _IMPORT_RE = re.compile(
 )
 _CALL_RE = re.compile(r"\b(domain|url-prefix|url|regexp)\s*\(", re.I)
 _PLUGIN_RE = re.compile(r"@plugin\b", re.I)
+# Every literal at-keyword; not case-sensitive on purpose, and `(?![-\w])`
+# keeps `@import-x` (a variable) out.  Used on raw text, never a token stream.
+_AT_IMPORT_RE = re.compile(r"@import(?![-\w])", re.I)
 # lessc's own rule for "this import is plain CSS, just emit it" (tree/import.js).
 # Case-sensitive on purpose: `.CSS` is compiled as LESS by lessc.
 _CSS_PATH_RE = re.compile(r"[#.&?]css([?;].*)?$")
@@ -292,10 +295,17 @@ def _find_js_backtick(text: str) -> int:
     return -1
 
 
-def _skip_space(text: str, i: int) -> int:
+def _skip_space_comments(text: str, i: int) -> int:
+    """Skip whitespace and comments between two import tokens."""
     n = len(text)
-    while i < n and text[i].isspace():
-        i += 1
+    while i < n:
+        if text[i].isspace():
+            i += 1
+            continue
+        if text.startswith("/*", i) or text.startswith("//", i):
+            i = _skip_comment(text, i)
+            continue
+        break
     return i
 
 
@@ -343,51 +353,42 @@ def _read_paren(text: str, i: int) -> tuple[str | None, int]:
 
 
 def _imports_in(text: str) -> list[tuple[list[str], str | None]]:
-    """Collect ``(options, path)`` for every ``@import`` outside strings.
+    """Collect ``(options, path)`` for every literal ``@import`` in ``text``.
 
-    Only the import's own path token is read, never the media suffix that may
-    follow it: lessc resolves and compiles that path regardless of what media
-    text trails it.
+    The scan is deliberately *not* token aware: it visits every occurrence of
+    the literal at-keyword, wherever it appears, and parses forwards from
+    there.  LESS can only compile an import written as this literal token, so
+    a string, comment or ``url()`` body cannot hide one from the check, and no
+    disagreement with lessc's tokenizer can make an import invisible.  Only the
+    import's own path token is read, never the media suffix that may follow it:
+    lessc resolves and compiles the path regardless of what trails it.
+
+    Anything that does not parse as a whole import is returned as malformed.
     """
     found: list[tuple[list[str], str | None]] = []
-    i = 0
     n = len(text)
-    while i < n:
-        c = text[i]
-        if c in "\"'":
-            end = _skip_string(text, i)
-            i = end if end > i else n
-            continue
-        if c == "/" and text.startswith("/*", i):
-            i = _skip_comment(text, i)
-            continue
-        boundary = i + 7 >= n or not (text[i + 7].isalnum() or text[i + 7] in "-_")
-        if c == "@" and text[i:i + 7].lower() == "@import" and boundary:
-            j = _skip_space(text, i + 7)
-            options: list[str] = []
-            if j < n and text[j] == "(":
-                raw, j = _read_paren(text, j)
-                if raw is None:
-                    found.append((options, None))
-                    i += 7
-                    continue
-                options = [part.strip() for part in raw.split(",") if part.strip()]
-                j = _skip_space(text, j)
-            path: str | None = None
-            if j < n and text[j] in "\"'":
-                path, j = _read_quoted(text, j)
-            elif text[j:j + 4].lower() == "url(":
-                raw, j = _read_paren(text, j + 3)
-                if raw is not None:
-                    value = raw.strip()
-                    if value[:1] in "\"'":
-                        path, _ = _read_quoted(value, 0)
-                    else:
-                        path = value or None
-            found.append((options, path))
-            i = j if j > i else i + 7
-            continue
-        i += 1
+    for match in _AT_IMPORT_RE.finditer(text):
+        j = _skip_space_comments(text, match.end())
+        options: list[str] = []
+        if j < n and text[j] == "(":
+            raw, j = _read_paren(text, j)
+            if raw is None:
+                found.append((options, None))
+                continue
+            options = [part.strip() for part in raw.split(",") if part.strip()]
+            j = _skip_space_comments(text, j)
+        path: str | None = None
+        if j < n and text[j] in "\"'":
+            path, _ = _read_quoted(text, j)
+        elif text[j:j + 4].lower() == "url(":
+            raw, _ = _read_paren(text, j + 3)
+            if raw is not None:
+                value = raw.strip()
+                if value[:1] in "\"'":
+                    path, _ = _read_quoted(value, 0)
+                else:
+                    path = value or None
+        found.append((options, path))
     return found
 
 
@@ -400,17 +401,25 @@ def unsafe_reason(source: str) -> str | None:
     functions, and no LESS import at all.  The palette library is inlined
     before this check, so the compiled source is exactly what is scanned, and
     CSS imports are passthrough and safe.
+
+    ``@plugin``, the file functions and ``@import`` are matched against the raw
+    source, not a token stream.  Earlier rounds each hid a real import behind a
+    corner where this check's idea of a string or comment differed from the
+    compiler's.  A raw scan cannot have that disagreement: the check sees every
+    literal occurrence, and refuses anything that is not a plain-CSS import.
     """
-    clean = _strip_comments(source)
-    if _PLUGIN_RE.search(clean):
+    if _PLUGIN_RE.search(source):
         return "refused unsafe LESS: @plugin is not allowed"
     if _find_js_backtick(source) >= 0:
+        # Backticks are harmless unless lessc runs with --js (it never does),
+        # but refuse them anyway.  This one stays token aware: legitimate
+        # stylesheets quote `code` in comments and strings.
         return "refused unsafe LESS: inline JavaScript is not allowed"
-    file_fn = _FILE_FN_RE.search(clean)
+    file_fn = _FILE_FN_RE.search(source)
     if file_fn:
         return (f"refused unsafe LESS: {file_fn.group(1)}() reads local files "
                 "and is not allowed")
-    for options, path in _imports_in(clean):
+    for options, path in _imports_in(source):
         if path is None:
             return "refused unsafe LESS: malformed @import"
         if options:

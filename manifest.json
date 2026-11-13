@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.alxwolfenstein97.omaweb",
   "name": "OmaWeb",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "author": "AlxWolfenstein97",
   "license": "MIT",
   "description": "Catppuccin userstyles reshaped to the active Omarchy theme through Stylus, with an optional Dark Reader settings export for sites no style covers.",

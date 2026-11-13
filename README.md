@@ -536,8 +536,11 @@ extension id, Stylus import state and Dark Reader export.
   nested parser. `lessc` is told to refuse `@plugin` where the compiler
   supports it, and OmaWeb itself rejects `@plugin`, inline JavaScript,
   file-reading functions (`data-uri()`, `image-size()`) and every import that
-  is not plain CSS. A replaced Catppuccin export can change CSS; it cannot run
-  Node code, reach a recursive parser, or embed local files.
+  is not plain CSS. Those checks run against the raw stylesheet text rather
+  than a token stream, so a string or comment cannot hide one, and any import
+  that does not parse cleanly is refused. A replaced Catppuccin export can
+  change CSS; it cannot run Node code, reach a recursive parser, or embed local
+  files.
 - **No patched extension.** Stylus and Dark Reader are the signed store builds;
   OmaWeb never vendors or modifies them.
 - **No browser-wide flags beyond `--load-extension`.** The installer edits only
