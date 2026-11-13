@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 
 
 def now() -> str:

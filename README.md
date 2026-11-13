@@ -533,8 +533,10 @@ extension id, Stylus import state and Dark Reader export.
   `s/*` and `theme.json` and declares nothing else.
 - **The bundle is data, not code.** `lessc` is told to refuse `@plugin` where
   the compiler supports it, and OmaWeb itself rejects `@plugin`, inline
-  JavaScript and any import that is not CSS or its vendored palette library.
-  A replaced Catppuccin export can change CSS; it cannot run Node code.
+  JavaScript, file-reading functions (`data-uri()`, `image-size()`) and any
+  import that is not CSS or its vendored palette library. A replaced
+  Catppuccin export can change CSS; it cannot run Node code or embed local
+  files.
 - **No patched extension.** Stylus and Dark Reader are the signed store builds;
   OmaWeb never vendors or modifies them.
 - **No browser-wide flags beyond `--load-extension`.** The installer edits only

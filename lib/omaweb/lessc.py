@@ -34,6 +34,7 @@ _IMPORT_RE = re.compile(
 _CALL_RE = re.compile(r"\b(domain|url-prefix|url|regexp)\s*\(", re.I)
 _PLUGIN_RE = re.compile(r"@plugin\b", re.I)
 _IMPORT_STMT_RE = re.compile(r"@import\s*(?:\(([^)]*)\))?\s*([^;]+);", re.I)
+_FILE_FN_RE = re.compile(r"\b(data-uri|image-size|image-width|image-height)\s*\(", re.I)
 
 # lessc flags we add when the installed compiler knows them.  Keyed by path;
 # builds compile many styles through the same binary.
@@ -274,6 +275,10 @@ def unsafe_reason(source: str, lib_path: Path) -> str | None:
         return "refused unsafe LESS: @plugin is not allowed"
     if _find_js_backtick(source) >= 0:
         return "refused unsafe LESS: inline JavaScript is not allowed"
+    file_fn = _FILE_FN_RE.search(clean)
+    if file_fn:
+        return (f"refused unsafe LESS: {file_fn.group(1)}() reads local files "
+                "and is not allowed")
     allowed = str(lib_path)
     for match in _IMPORT_STMT_RE.finditer(clean):
         options = {
@@ -288,12 +293,14 @@ def unsafe_reason(source: str, lib_path: Path) -> str | None:
                 target = target[:-1].strip()
         bare = target.strip("\"'").strip()
         # Only `(css)` is harmless; every other option forces LESS to read and
-        # process the target, including `url(...)` imports.
+        # process the target, including `url(...)` imports.  The extension
+        # check is deliberately case-sensitive: lessc only treats lowercase
+        # `.css` as a passthrough, while `.CSS` is compiled as LESS.
         if options - {"css"}:
             return f"refused unsafe LESS: import of {bare[:80]!r} is not allowed"
         if "css" in options or bare == allowed:
             continue
-        if bare.split("?", 1)[0].split("#", 1)[0].lower().endswith(".css"):
+        if bare.endswith(".css"):
             continue
         return f"refused unsafe LESS: import of {bare[:80]!r} is not allowed"
     return None

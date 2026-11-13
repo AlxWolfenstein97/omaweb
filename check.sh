@@ -106,6 +106,44 @@ if "$bin" apply --no-fetch --quiet; then ok "apply"; else bad "apply"; fi
 if [[ -f $XDG_DATA_HOME/omaweb/index.json ]]; then ok "index.json"; else bad "index.json missing"; fi
 if [[ -d $asset/s ]]; then ok "asset extension web dir"; else bad "asset extension web dir missing"; fi
 
+note "less guard"
+python3 - "$here" "$XDG_CACHE_HOME/omarchy/omaweb/bundle/import.json" <<'PY' || fail=1
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+bundle = pathlib.Path(sys.argv[2])
+sys.path.insert(0, str(root / "lib"))
+from omaweb import lessc
+
+lib = root / "lib" / "vendor" / "less" / "lib" / "std" / "v1.less"
+
+def check(cond, label):
+    print(("  ok   " if cond else "  FAIL ") + label)
+    if not cond:
+        raise SystemExit(1)
+
+def refused(source):
+    return bool(lessc.unsafe_reason(source, lib))
+
+check(refused('@plugin "x.js";'), "@plugin refused")
+check(refused('.x{width:`1+1`}'), "inline JavaScript refused")
+check(refused('@import (inline) "/etc/passwd";'), "inline import refused")
+check(refused('@import (less) "x";'), "less import refused")
+check(refused('@import url("evil.less");'), "url(...less) import refused")
+check(refused('@import "x.CSS";'), "uppercase .CSS import refused")
+check(refused('.x{background:data-uri("/etc/passwd")}'), "data-uri refused")
+check(refused('.x{width:image-size("/etc/passwd")}'), "image-size refused")
+check(not refused('@import (css) url("https://x/y.css");'), "css import allowed")
+check(not refused('@import "x.css";'), "lowercase .css import allowed")
+raw = json.loads(bundle.read_text())
+bad = [
+    entry.get("name")
+    for entry in raw
+    if lessc.unsafe_reason(
+        lessc.rewrite_imports(entry.get("sourceCode") or "", lib), lib)
+]
+check(not bad, f"bundle passes guard ({len(raw)} entries)")
+PY
+
 # One explicit opt-out gives the asset checks a disabled file to inspect.
 "$bin" disable claude --quiet >/dev/null 2>&1 || true
 
