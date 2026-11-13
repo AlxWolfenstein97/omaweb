@@ -231,11 +231,20 @@ def _find_token(text: str, token: str, start: int) -> int:
     return -1
 
 
-def _strip_comments(text: str) -> str:
-    """Drop comments while leaving strings alone.
+def _url_end(text: str, i: int) -> int:
+    """Index just past a ``url(...)`` token starting at ``i``."""
+    _, after = _read_paren(text, i + 3)
+    return after if after > i + 3 else len(text)
 
-    ``//`` is only treated as a comment when it starts a line or follows
-    whitespace, so ``http://`` inside an unquoted ``url()`` survives.
+
+def _strip_comments(text: str) -> str:
+    """Drop comments the way lessc does, leaving strings and ``url()`` alone.
+
+    lessc starts a line comment at any ``//`` outside a string, including
+    directly after an operator (``@x://``), and turns comment absorption off
+    inside an unquoted ``url(...)`` body, so ``url(http://...)`` survives.
+    Stripping must agree with the compiler or a quote inside a comment can
+    hide real source from the guard.
     """
     out: list[str] = []
     i = 0
@@ -247,14 +256,15 @@ def _strip_comments(text: str) -> str:
             out.append(text[i:end])
             i = end
             continue
-        if text.startswith("/*", i):
+        if text.startswith("/*", i) or text.startswith("//", i):
             i = _skip_comment(text, i)
             continue
-        if text.startswith("//", i):
-            prev = text[i - 1] if i else "\n"
-            if prev.isspace() or prev in ";{}":
-                i = _skip_comment(text, i)
-                continue
+        boundary = i == 0 or not (text[i - 1].isalnum() or text[i - 1] in "-_")
+        if text.startswith("url(", i) and boundary:
+            end = _url_end(text, i)
+            out.append(text[i:end])
+            i = end
+            continue
         out.append(c)
         i += 1
     return "".join(out)
@@ -269,14 +279,13 @@ def _find_js_backtick(text: str) -> int:
         if c in "\"'":
             i = _skip_string(text, i)
             continue
-        if text.startswith("/*", i):
+        if text.startswith("/*", i) or text.startswith("//", i):
             i = _skip_comment(text, i)
             continue
-        if text.startswith("//", i):
-            prev = text[i - 1] if i else "\n"
-            if prev.isspace() or prev in ";{}":
-                i = _skip_comment(text, i)
-                continue
+        boundary = i == 0 or not (text[i - 1].isalnum() or text[i - 1] in "-_")
+        if text.startswith("url(", i) and boundary:
+            i = _url_end(text, i)
+            continue
         if c == "`":
             return i
         i += 1
@@ -313,6 +322,10 @@ def _read_paren(text: str, i: int) -> tuple[str | None, int]:
     n = len(text)
     while j < n:
         c = text[j]
+        if c == "\\":
+            # Escaped parens (legal inside an unquoted url()) are literal.
+            j += 2
+            continue
         if c in "\"'":
             _, end = _read_quoted(text, j)
             if end == j:
