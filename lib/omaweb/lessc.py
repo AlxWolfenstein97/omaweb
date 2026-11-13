@@ -6,6 +6,12 @@ variable), so the only reliable point to read them is after ``lessc`` has
 resolved them.  We then split the compiled CSS into one file per
 ``@-moz-document`` block, which lets the extension inject only the blocks whose
 selectors actually match the current URL.
+
+The bundle is remote, mutable data, so it is treated as data only: the compiler
+is asked to disable ``@plugin`` where the installed lessc supports it, and the
+source is refused if it still contains ``@plugin``, inline JavaScript, or an
+import that is not CSS or the vendored palette library.  A replaced bundle
+therefore cannot turn a theme switch into code execution.
 """
 
 from __future__ import annotations
@@ -26,6 +32,31 @@ _IMPORT_RE = re.compile(
     re.I,
 )
 _CALL_RE = re.compile(r"\b(domain|url-prefix|url|regexp)\s*\(", re.I)
+_PLUGIN_RE = re.compile(r"@plugin\b", re.I)
+_IMPORT_STMT_RE = re.compile(r"@import\s*(?:\(([^)]*)\))?\s*([^;]+);", re.I)
+
+# lessc flags we add when the installed compiler knows them.  Keyed by path;
+# builds compile many styles through the same binary.
+_SAFETY_FLAGS: dict[str, tuple[str, ...]] = {}
+
+
+def _safety_flags(lessc: str) -> tuple[str, ...]:
+    """Return parser-level hardening flags supported by this lessc."""
+    cached = _SAFETY_FLAGS.get(lessc)
+    if cached is not None:
+        return cached
+    flags: list[str] = []
+    try:
+        proc = subprocess.run(
+            [lessc, "--help"], capture_output=True, text=True, timeout=15,
+        )
+        help_text = (proc.stdout or "") + (proc.stderr or "")
+    except (OSError, subprocess.TimeoutExpired):
+        help_text = ""
+    if "--disable-plugin-rule" in help_text:
+        flags.append("--disable-plugin-rule")
+    _SAFETY_FLAGS[lessc] = tuple(flags)
+    return _SAFETY_FLAGS[lessc]
 
 
 # --------------------------------------------------------------------------- LESS
@@ -77,7 +108,7 @@ def compile_less(source: str, lessc: str, workdir: Path, name: str,
     util.atomic_write(src, source)
     try:
         proc = subprocess.run(
-            [lessc, "--no-color", str(src), str(out)],
+            [lessc, "--no-color", *_safety_flags(lessc), str(src), str(out)],
             capture_output=True, text=True, timeout=timeout,
         )
     except subprocess.TimeoutExpired:
@@ -178,19 +209,94 @@ def _find_token(text: str, token: str, start: int) -> int:
 
 
 def _strip_comments(text: str) -> str:
+    """Drop comments while leaving strings alone.
+
+    ``//`` is only treated as a comment when it starts a line or follows
+    whitespace, so ``http://`` inside an unquoted ``url()`` survives.
+    """
     out: list[str] = []
     i = 0
     n = len(text)
     while i < n:
+        c = text[i]
+        if c in "\"'":
+            end = _skip_string(text, i)
+            out.append(text[i:end])
+            i = end
+            continue
         if text.startswith("/*", i):
             i = _skip_comment(text, i)
             continue
         if text.startswith("//", i):
-            i = _skip_comment(text, i)
-            continue
-        out.append(text[i])
+            prev = text[i - 1] if i else "\n"
+            if prev.isspace() or prev in ";{}":
+                i = _skip_comment(text, i)
+                continue
+        out.append(c)
         i += 1
     return "".join(out)
+
+
+def _find_js_backtick(text: str) -> int:
+    """Index of an inline-JavaScript backtick outside strings and comments."""
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c in "\"'":
+            i = _skip_string(text, i)
+            continue
+        if text.startswith("/*", i):
+            i = _skip_comment(text, i)
+            continue
+        if text.startswith("//", i):
+            prev = text[i - 1] if i else "\n"
+            if prev.isspace() or prev in ";{}":
+                i = _skip_comment(text, i)
+                continue
+        if c == "`":
+            return i
+        i += 1
+    return -1
+
+
+def unsafe_reason(source: str, lib_path: Path) -> str | None:
+    """Refuse LESS that can execute code or read arbitrary files.
+
+    The Catppuccin bundle is fetched from a mutable upstream release and may be
+    replaced independently of the plugin.  It is only ever allowed to be a
+    stylesheet: no ``@plugin``, no inline JavaScript, and no LESS/inline import
+    other than the vendored palette library.  CSS imports are passthrough and
+    safe, so they stay.
+    """
+    clean = _strip_comments(source)
+    if _PLUGIN_RE.search(clean):
+        return "refused unsafe LESS: @plugin is not allowed"
+    if _find_js_backtick(source) >= 0:
+        return "refused unsafe LESS: inline JavaScript is not allowed"
+    allowed = str(lib_path)
+    for match in _IMPORT_STMT_RE.finditer(clean):
+        options = {
+            item.strip().lower()
+            for item in (match.group(1) or "").split(",")
+            if item.strip()
+        }
+        target = match.group(2).strip()
+        if target.lower().startswith("url("):
+            target = target[4:].strip()
+            if target.endswith(")"):
+                target = target[:-1].strip()
+        bare = target.strip("\"'").strip()
+        # Only `(css)` is harmless; every other option forces LESS to read and
+        # process the target, including `url(...)` imports.
+        if options - {"css"}:
+            return f"refused unsafe LESS: import of {bare[:80]!r} is not allowed"
+        if "css" in options or bare == allowed:
+            continue
+        if bare.split("?", 1)[0].split("#", 1)[0].lower().endswith(".css"):
+            continue
+        return f"refused unsafe LESS: import of {bare[:80]!r} is not allowed"
+    return None
 
 
 def css_unescape_string(raw: str) -> str:
@@ -331,6 +437,9 @@ def build_style(entry: dict[str, Any], *, lessc: str, lib_path: Path, palette_le
     sid = entry["id"]
     source = rewrite_imports(entry["source"], lib_path)
     source = source + "\n\n" + var_lines(entry) + "\n" + palette_less
+    refused = unsafe_reason(source, lib_path)
+    if refused:
+        return None, refused
     css, error = compile_less(source, lessc, workdir, sid, timeout=timeout)
     if error or css is None:
         return None, error or "unknown lessc error"
